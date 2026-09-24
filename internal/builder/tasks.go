@@ -321,9 +321,16 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 		}
 
 		// 3. 处理依赖 AAR 的 jni/assets
-		abiFilters := []string{"arm64-v8a", "x86_64"}
+		// ABI 过滤：ndk.abiFilters 显式指定时才过滤；否则包含全部 ABI（对齐 Gradle universal APK）
+		var abiFilters []string
 		if cfg, ok := ctx.Config.(*AppConfig); ok && len(cfg.ABIFilters) > 0 {
 			abiFilters = cfg.ABIFilters
+		}
+		abiIncluded := func(abi string) bool {
+			if len(abiFilters) == 0 {
+				return true
+			}
+			return contains(abiFilters, abi)
 		}
 		// 3a. app 自身与 library 模块的 assets / jniLibs
 		if cfg, ok := ctx.Config.(*AppConfig); ok {
@@ -333,7 +340,7 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 			for _, jdir := range cfg.LibraryJniLibs {
 				entries, _ := os.ReadDir(jdir)
 				for _, e := range entries {
-					if e.IsDir() && contains(abiFilters, e.Name()) {
+					if e.IsDir() && abiIncluded(e.Name()) {
 						copyTree(filepath.Join(jdir, e.Name()), filepath.Join(tmpDir, "lib", e.Name()))
 					}
 				}
@@ -356,7 +363,7 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 					parts := strings.SplitN(f.Name, "/", 3)
 					if len(parts) >= 2 {
 						abi := parts[1]
-						if contains(abiFilters, abi) {
+						if abiIncluded(abi) {
 							rc, _ := f.Open()
 							dst := filepath.Join(tmpDir, "lib", abi, filepath.Base(f.Name))
 							os.MkdirAll(filepath.Dir(dst), 0755)
