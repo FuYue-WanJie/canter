@@ -281,6 +281,11 @@ func (b *Builder) Clean() {
 	}
 }
 
+// depsSignatureFile 依赖解压标记文件（作为任务输入：内容随依赖集合变化，O(1) 廉价）
+func depsSignatureFile(ctx *engine.BuildContext) string {
+	return filepath.Join(ctx.BuildDir, "deps", ".canter-reskey")
+}
+
 // resolutionCacheFile 解析缓存的落盘路径（放在 clean 目录之外，clean 后仍可复用避免 BFS 重跑）
 func (b *Builder) resolutionCacheFile() string {
 	return b.CacheDir + ".resolution.json"

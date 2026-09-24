@@ -150,7 +150,7 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "libs"))
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("D8 打包...")
@@ -267,7 +267,7 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "dex"))
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "resources.ap_"))
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "app-debug.apk"))
 	if ac, ok := ctx.Config.(*AppConfig); ok {

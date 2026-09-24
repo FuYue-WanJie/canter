@@ -17,7 +17,7 @@ func JavaCompileTask(ctx *engine.BuildContext) *engine.Task {
 	module := ctx.ModuleDirOrProject()
 	t.AddDirInputs(filepath.Join(module, "src", "main", "java"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "gen"))
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "classes"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		javac := filepath.Join(ctx.JavaHome, "bin", "javac")
@@ -83,7 +83,7 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 	module := ctx.ModuleDirOrProject()
 	t.AddDirInputs(filepath.Join(module, "src", "main", "java"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "classes"))
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		module := ctx.ModuleDirOrProject()

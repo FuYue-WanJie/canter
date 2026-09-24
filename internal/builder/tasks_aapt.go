@@ -19,7 +19,7 @@ func MergeResourcesTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("mergeResources")
 	module := ctx.ModuleDirOrProject()
 	t.AddDirInputs(filepath.Join(module, "src", "main", "res"))
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "merged_res"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("合并资源...")
