@@ -403,10 +403,25 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 			if err != nil || info.IsDir() {
 				return nil
 			}
-			rel, _ := filepath.Rel(tmpDir, path)
-			fh, err := zw.Create(filepath.ToSlash(rel))
-			if err != nil {
+			relPath, rerr := filepath.Rel(tmpDir, path)
+			if rerr != nil {
 				return nil
+			}
+			rel := filepath.ToSlash(relPath)
+			// native 库不压缩（对齐 AGP：便于运行时 mmap，且与 Gradle 产物一致）
+			var fh io.Writer
+			if strings.HasPrefix(rel, "lib/") && strings.HasSuffix(rel, ".so") {
+				w, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zip.Store})
+				if err != nil {
+					return nil
+				}
+				fh = w
+			} else {
+				w, err := zw.Create(rel)
+				if err != nil {
+					return nil
+				}
+				fh = w
 			}
 			data, err := os.ReadFile(path)
 			if err != nil {
