@@ -19,6 +19,7 @@ func MergeResourcesTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("mergeResources")
 	module := ctx.ModuleDirOrProject()
 	t.AddDirInputs(filepath.Join(module, "src", "main", "res"))
+	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "merged_res"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("合并资源...")
@@ -26,9 +27,14 @@ func MergeResourcesTask(ctx *engine.BuildContext) *engine.Task {
 		os.MkdirAll(merged, 0755)
 		module := ctx.ModuleDirOrProject()
 		var resDirs []string
-		srcRes := filepath.Join(module, "src", "main", "res")
-		if _, err := os.Stat(srcRes); err == nil {
-			resDirs = append(resDirs, srcRes)
+		// app 自身（main + flavor）与项目 library 模块的 res
+		if ac, ok := ctx.Config.(*AppConfig); ok && len(ac.LibraryResDirs) > 0 {
+			resDirs = append(resDirs, ac.LibraryResDirs...)
+		} else {
+			srcRes := filepath.Join(module, "src", "main", "res")
+			if _, err := os.Stat(srcRes); err == nil {
+				resDirs = append(resDirs, srcRes)
+			}
 		}
 		depsDir := filepath.Join(ctx.BuildDir, "deps")
 		if entries, err := os.ReadDir(depsDir); err == nil {

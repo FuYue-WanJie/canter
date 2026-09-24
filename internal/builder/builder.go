@@ -138,6 +138,30 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		break
 	}
 
+	// 收集项目 library 模块的资源/assets/jniLibs，以及 app 自身（含选中 flavor）的 assets/jniLibs
+	for _, mod := range config.Modules {
+		if mod.Path == "" {
+			continue
+		}
+		isApp := mod.Path == moduleDir
+		sets := []string{"main"}
+		if isApp && appConfig.SelectedFlavor != "" {
+			sets = append(sets, appConfig.SelectedFlavor)
+		}
+		for _, set := range sets {
+			base := filepath.Join(mod.Path, "src", set)
+			if fi, err := os.Stat(filepath.Join(base, "res")); err == nil && fi.IsDir() {
+				appConfig.LibraryResDirs = append(appConfig.LibraryResDirs, filepath.Join(base, "res"))
+			}
+			if fi, err := os.Stat(filepath.Join(base, "assets")); err == nil && fi.IsDir() {
+				appConfig.LibraryAssets = append(appConfig.LibraryAssets, filepath.Join(base, "assets"))
+			}
+			if fi, err := os.Stat(filepath.Join(base, "jniLibs")); err == nil && fi.IsDir() {
+				appConfig.LibraryJniLibs = append(appConfig.LibraryJniLibs, filepath.Join(base, "jniLibs"))
+			}
+		}
+	}
+
 	ctx := &engine.BuildContext{
 		ProjectDir:   projectDir,
 		BuildDir:     buildDir,

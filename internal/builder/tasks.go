@@ -30,8 +30,11 @@ type AppConfig struct {
 	Release        bool
 	BuildConfigs   []string // flavor buildConfigField 等额外字段（key=value）
 	SelectedFlavor string
-	Parcelize      bool // 是否启用 kotlin-parcelize 插件
-	Compose        bool // 是否启用 Compose 编译器插件
+	Parcelize      bool     // 是否启用 kotlin-parcelize 插件
+	Compose        bool     // 是否启用 Compose 编译器插件
+	LibraryResDirs []string // 项目 library 模块的 res 目录
+	LibraryAssets  []string // 项目 library 模块的 assets 目录
+	LibraryJniLibs []string // 项目 library 模块的 jniLibs 目录
 }
 
 // MinifyCompatible 判断是否启用 R8 混淆
@@ -146,6 +149,8 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("dexBuild")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "classes"))
+	t.AddDirInputs(filepath.Join(ctx.BuildDir, "libs"))
+	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("D8 打包...")
@@ -170,6 +175,12 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 		if err := copyTree(kotlinClasses, tmp); err != nil {
 			fmt.Printf("复制 Kotlin 类失败: %v\n", err)
 			return false
+		}
+		// 项目 library 模块的编译产物（build/libs/*/classes）
+		for _, libDir := range projectLibClassDirs(ctx) {
+			if err := copyTree(libDir, tmp); err != nil {
+				fmt.Printf("复制库模块类失败: %v\n", err)
+			}
 		}
 		// 依赖类：同名类先到先得（避免 KMP 变体重复）
 		if entries, err := os.ReadDir(depsDir); err == nil {
@@ -256,8 +267,17 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "dex"))
+	t.AddDirInputs(filepath.Join(ctx.BuildDir, "deps"))
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "resources.ap_"))
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "app-debug.apk"))
+	if ac, ok := ctx.Config.(*AppConfig); ok {
+		for _, d := range ac.LibraryAssets {
+			t.AddDirInputs(d)
+		}
+		for _, d := range ac.LibraryJniLibs {
+			t.AddDirInputs(d)
+		}
+	}
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		tmpDir, err := os.MkdirTemp("", "canter-apk")
 		if err != nil {
@@ -304,6 +324,20 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 		if cfg, ok := ctx.Config.(*AppConfig); ok && len(cfg.ABIFilters) > 0 {
 			abiFilters = cfg.ABIFilters
 		}
+		// 3a. app 自身与 library 模块的 assets / jniLibs
+		if cfg, ok := ctx.Config.(*AppConfig); ok {
+			for _, adir := range cfg.LibraryAssets {
+				copyTree(adir, filepath.Join(tmpDir, "assets"))
+			}
+			for _, jdir := range cfg.LibraryJniLibs {
+				entries, _ := os.ReadDir(jdir)
+				for _, e := range entries {
+					if e.IsDir() && contains(abiFilters, e.Name()) {
+						copyTree(filepath.Join(jdir, e.Name()), filepath.Join(tmpDir, "lib", e.Name()))
+					}
+				}
+			}
+		}
 		depsDir := filepath.Join(ctx.BuildDir, "deps")
 		filepath.Walk(depsDir, func(path string, info os.FileInfo, err error) error {
 			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".aar") {
@@ -314,6 +348,9 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 				return nil
 			}
 			for _, f := range zr.File {
+				if f.FileInfo().IsDir() {
+					continue
+				}
 				if strings.HasPrefix(f.Name, "jni/") && strings.HasSuffix(f.Name, ".so") {
 					parts := strings.SplitN(f.Name, "/", 3)
 					if len(parts) >= 2 {

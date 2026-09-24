@@ -63,15 +63,24 @@ func extractZipEntry(f *zip.File, dst string) {
 // materializeDeps 从缓存坐标下载并解压依赖（下载命中全局缓存时很快）
 func (b *Builder) materializeDeps(coords []depCoord, depsDir string, downloader *Downloader) error {
 	success, total := 0, 0
+	var failed []string
 	for _, c := range coords {
 		total++
 		artPath, err := downloader.Download(c.Group, c.Artifact, c.Version)
 		if err != nil {
+			failed = append(failed, c.Group+":"+c.Artifact+":"+c.Version)
 			continue
 		}
 		success++
 		unzipDepTo(c.Group, c.Artifact, artPath, depsDir)
 	}
 	fmt.Printf("依赖解析: 成功 %d/%d\n", success, total)
+	if len(failed) > 0 {
+		max := len(failed)
+		if max > 10 {
+			max = 10
+		}
+		fmt.Printf("  失败 %d 个: %v%s\n", len(failed), failed[:max], map[bool]string{true: " ...", false: ""}[len(failed) > 10])
+	}
 	return nil
 }
