@@ -51,5 +51,32 @@ func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
 		config.Modules = append(config.Modules, module)
 	}
 
+	// 处理 composite build（includeBuild）：解析其 settings 并将模块纳入（供编译其类）
+	for _, ib := range settingsResult.IncludeBuilds {
+		ibDir := filepath.Join(projectDir, filepath.FromSlash(strings.TrimLeft(ib, "./")))
+		ibSettingsPath := filepath.Join(ibDir, "settings.gradle.kts")
+		if _, err := os.Stat(ibSettingsPath); err != nil {
+			ibSettingsPath = filepath.Join(ibDir, "settings.gradle")
+		}
+		ibSettings := SettingsParser{Script: g.Script}.Parse(ibSettingsPath)
+		for _, inc := range ibSettings.Includes {
+			rel := strings.TrimLeft(inc, ":")
+			rel = strings.ReplaceAll(rel, ":", "/")
+			modDir := filepath.Join(ibDir, filepath.FromSlash(rel))
+			if remap, ok := ibSettings.ProjectDirRemap[inc]; ok {
+				modDir = filepath.Join(ibDir, filepath.FromSlash(strings.TrimLeft(remap, "./")))
+			}
+			buildFile := filepath.Join(modDir, "build.gradle.kts")
+			if _, err := os.Stat(buildFile); err != nil {
+				buildFile = filepath.Join(modDir, "build.gradle")
+				if _, err := os.Stat(buildFile); err != nil {
+					continue
+				}
+			}
+			module := BuildFileParser{Script: g.Script}.Parse(buildFile, config.Catalog, config.GradleProperties)
+			config.Modules = append(config.Modules, module)
+		}
+	}
+
 	return config
 }

@@ -96,16 +96,22 @@ func coordHash(coords []depCoord) string {
 	return hex.EncodeToString(h.Sum(nil))
 }
 
+// variantSuffixes KMP 平台变体后缀
+var variantSuffixes = []string{"-android", "-jvm", "-release", "-desktop", "-linuxx64", "-macosx64", "-macosarm64", "-windows", "-wasm", "-js", "-metadata"}
+
+// variantBase 去掉 KMP 平台变体后缀，得到 base 名
+func variantBase(a string) string {
+	for _, s := range variantSuffixes {
+		if strings.HasSuffix(a, s) {
+			return a[:len(a)-len(s)]
+		}
+	}
+	return a
+}
+
 // collapseVariantCoords 折叠 KMP 平台变体：同 base 名只保留一个（优先 -android > 无后缀 > -release > -jvm）
 func collapseVariantCoords(coords []depCoord) []depCoord {
-	baseOf := func(a string) string {
-		for _, s := range []string{"-android", "-jvm", "-release", "-desktop", "-linuxx64", "-macosx64", "-macosarm64", "-windows", "-wasm", "-js", "-metadata"} {
-			if strings.HasSuffix(a, s) {
-				return a[:len(a)-len(s)]
-			}
-		}
-		return a
-	}
+	baseOf := variantBase
 	scoreOf := func(a string) int {
 		switch {
 		case strings.HasSuffix(a, "-android"):

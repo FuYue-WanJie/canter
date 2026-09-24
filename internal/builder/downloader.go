@@ -174,9 +174,8 @@ func findGradleCachedArtifact(group, artifact, version, ext string) string {
 	if home == "" {
 		return ""
 	}
-	groupPath := strings.ReplaceAll(group, ".", "/")
 	versionDir := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1",
-		filepath.FromSlash(groupPath), artifact, version)
+		group, artifact, version)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
 		return ""
@@ -196,15 +195,14 @@ func findGradleCachedArtifact(group, artifact, version, ext string) string {
 	return ""
 }
 
-// findGradleCachedFile 在 Gradle modules-2 缓存中按文件名查找
+// findGradleCachedFile 在 Gradle modules-2 缓存中按文件名查找（注意：Gradle 缓存的 group 目录用点号）
 func findGradleCachedFile(group, artifact, version, target string) string {
 	home, _ := os.UserHomeDir()
 	if home == "" {
 		return ""
 	}
-	groupPath := strings.ReplaceAll(group, ".", "/")
 	versionDir := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1",
-		filepath.FromSlash(groupPath), artifact, version)
+		group, artifact, version)
 	entries, err := os.ReadDir(versionDir)
 	if err != nil {
 		return ""

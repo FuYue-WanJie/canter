@@ -143,6 +143,12 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 				args = append(args, "-Xplugin="+cj)
 			}
 		}
+		// kotlin-serialization 编译器插件
+		if ac, ok := ctx.Config.(*AppConfig); ok && ac.Serialization {
+			if sj := findSerializationCompilerJar(); sj != "" {
+				args = append(args, "-Xplugin="+sj)
+			}
+		}
 		args = append(args, ktSources...)
 		cmd := exec.Command(javaBin, args...)
 		cmdOut, err := cmd.CombinedOutput()
@@ -154,6 +160,27 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		return true
 	}
 	return t
+}
+
+// findSerializationCompilerJar 从 Gradle 缓存中找 kotlin-serialization 编译器插件（embeddable）
+func findSerializationCompilerJar() string {
+	home, _ := os.UserHomeDir()
+	gradleCache := filepath.Join(home, ".gradle", "caches")
+	var found string
+	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		if strings.HasPrefix(name, "kotlin-serialization-compiler-plugin-embeddable-") && strings.HasSuffix(name, ".jar") &&
+			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
+			if found == "" || name > found {
+				found = path
+			}
+		}
+		return nil
+	})
+	return found
 }
 
 // findComposeCompilerJar 从 Gradle 缓存中找 Compose 编译器插件（embeddable）
@@ -219,23 +246,21 @@ func findParcelizeCompilerJar() string {
 	return found
 }
 
-// findKotlinCompilerJar 从 Gradle 缓存中找 kotlin-compiler-embeddable jar
+// findKotlinCompilerJar 从 Gradle 缓存中找 kotlin-compiler-embeddable jar（取最高版本）
 func findKotlinCompilerJar() string {
 	home, _ := os.UserHomeDir()
 	gradleCache := filepath.Join(home, ".gradle", "caches")
 	var found string
 	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil {
+		if err != nil || info.IsDir() {
 			return nil
 		}
-		if found != "" {
-			return filepath.SkipDir
-		}
-		if !info.IsDir() && strings.HasPrefix(info.Name(), "kotlin-compiler-embeddable-") &&
-			strings.HasSuffix(info.Name(), ".jar") && !strings.Contains(info.Name(), "sources") &&
-			!strings.Contains(info.Name(), "javadoc") {
-			found = path
-			return filepath.SkipDir
+		name := info.Name()
+		if strings.HasPrefix(name, "kotlin-compiler-embeddable-") && strings.HasSuffix(name, ".jar") &&
+			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
+			if found == "" || name > found {
+				found = path
+			}
 		}
 		return nil
 	})

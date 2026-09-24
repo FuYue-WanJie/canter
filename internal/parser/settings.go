@@ -10,6 +10,8 @@ var (
 	rootProjectNameRe = regexp.MustCompile(`rootProject\.name\s*=\s*"([^"]*)"`)
 	includeParenRe    = regexp.MustCompile(`include\s*\(([^)]*)\)`)
 	includeNoParenRe  = regexp.MustCompile(`include\s+"([^"]*)"`)
+	includeBuildRe    = regexp.MustCompile(`includeBuild\s*\(\s*"([^"]*)"\s*\)`)
+	projectDirRemapRe = regexp.MustCompile(`project\s*\(\s*"(:[^"]*)"\s*\)\s*\.projectDir\s*=\s*file\s*\(\s*"([^"]*)"\s*\)`)
 	googleRepoRe      = regexp.MustCompile(`^google\s*\(\s*\)`)
 	mavenCentralRe    = regexp.MustCompile(`^mavenCentral\s*\(\s*\)`)
 	mavenLocalRe      = regexp.MustCompile(`^mavenLocal\s*\(\s*\)`)
@@ -27,6 +29,8 @@ type SettingsParser struct {
 type SettingsResult struct {
 	ProjectName        string
 	Includes           []string
+	IncludeBuilds      []string
+	ProjectDirRemap    map[string]string
 	Repositories       []string
 	PluginRepositories []string
 }
@@ -58,6 +62,20 @@ func (p SettingsParser) Parse(settingsPath string) SettingsResult {
 			seenInclude[m[1]] = true
 			result.Includes = append(result.Includes, m[1])
 		}
+	}
+
+	// includeBuild("...")
+	if m := includeBuildRe.FindAllStringSubmatch(text, -1); m != nil {
+		for _, mm := range m {
+			result.IncludeBuilds = append(result.IncludeBuilds, mm[1])
+		}
+	}
+	// project(":x").projectDir = file("...")
+	for _, mm := range projectDirRemapRe.FindAllStringSubmatch(text, -1) {
+		if result.ProjectDirRemap == nil {
+			result.ProjectDirRemap = map[string]string{}
+		}
+		result.ProjectDirRemap[mm[1]] = mm[2]
 	}
 
 	if block, ok := p.Script.FindBlock(text, "pluginManagement"); ok {

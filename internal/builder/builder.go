@@ -49,11 +49,11 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		}
 	}
 
-	// platform 目录解析
+	// platform 目录解析（候选：android-<sdk>、android-<sdk>.0、android-<major>.0、android-<major>）
+	major := strings.SplitN(compileSDK, ".", 2)[0]
 	platformDir := filepath.Join(sdk, "platforms", "android-"+compileSDK)
-	if _, err := os.Stat(platformDir); err != nil && strings.Contains(compileSDK, ".") {
-		major := strings.SplitN(compileSDK, ".", 2)[0]
-		for _, cand := range []string{"android-" + compileSDK, "android-" + major + ".0", "android-" + major} {
+	if _, err := os.Stat(platformDir); err != nil {
+		for _, cand := range []string{"android-" + compileSDK, "android-" + compileSDK + ".0", "android-" + major + ".0", "android-" + major} {
 			if info, err := os.Stat(filepath.Join(sdk, "platforms", cand)); err == nil && info.IsDir() {
 				platformDir = filepath.Join(sdk, "platforms", cand)
 				break
@@ -134,6 +134,9 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 			}
 			if pl == "org.jetbrains.kotlin.plugin.compose" {
 				appConfig.Compose = true
+			}
+			if pl == "org.jetbrains.kotlin.plugin.serialization" {
+				appConfig.Serialization = true
 			}
 		}
 		break
@@ -449,6 +452,19 @@ func (b *Builder) resolveDependencies() error {
 				recordVersion(t.group, t.artifact, normV)
 				nextQ = append(nextQ, coord{t.group, t.artifact, normV})
 			}
+			// 从 Gradle Module Metadata 解析依赖与约束（KMP 库真实依赖常仅在此）
+			mdeps, mcons := b.parseModuleDeps(d.group, d.artifact, d.version)
+			for _, t := range mdeps {
+				normV := normalizeVersion(t.version)
+				recordVersion(t.group, t.artifact, normV)
+				nextQ = append(nextQ, coord{t.group, t.artifact, normV})
+			}
+			for k, v := range mcons {
+				nv := normalizeVersion(v)
+				if cur, ok := bomConstraints[k]; !ok || compareVersions(nv, cur) > 0 {
+					bomConstraints[k] = nv
+				}
+			}
 		}
 		queue = nextQ
 	}
@@ -465,9 +481,18 @@ func (b *Builder) resolveDependencies() error {
 	for _, gv := range gaMap {
 		key := gv.group + ":" + gv.artifact
 		highest := selectHighestVersion(gv.versions)
+		// BOM/模块约束可能声明在 base 名上（如 foundation），需同时按变体 base 名匹配
+		baseKey := gv.group + ":" + variantBase(gv.artifact)
 		if bc, ok := bomConstraints[key]; ok && bc != "" {
 			if highest == "" || compareVersions(bc, highest) > 0 {
 				highest = bc
+			}
+		}
+		if baseKey != key {
+			if bc, ok := bomConstraints[baseKey]; ok && bc != "" {
+				if highest == "" || compareVersions(bc, highest) > 0 {
+					highest = bc
+				}
 			}
 		}
 		maxVisible[key] = highest

@@ -32,6 +32,7 @@ type AppConfig struct {
 	SelectedFlavor string
 	Parcelize      bool     // 是否启用 kotlin-parcelize 插件
 	Compose        bool     // 是否启用 Compose 编译器插件
+	Serialization  bool     // 是否启用 kotlin-serialization 插件
 	VersionNameSuffix string // flavor 的 versionNameSuffix
 	LibraryResDirs []string // 项目 library 模块的 res 目录
 	LibraryAssets  []string // 项目 library 模块的 assets 目录
