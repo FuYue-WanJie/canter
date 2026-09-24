@@ -418,6 +418,30 @@ func (b *Builder) resolveDependencies() error {
 			if _, err := downloader.FetchPOM(d.group, d.artifact, d.version); err != nil {
 				continue
 			}
+			// 若该依赖是 BOM（packaging=pom），把其 dependencyManagement 作为全局版本约束
+			if isPlat, mgmt := b.pomIsPlatform(d.group, d.artifact, d.version, downloader); isPlat {
+				for k, v := range mgmt {
+					nv := normalizeVersion(v)
+					if cur, ok := bomConstraints[k]; !ok || compareVersions(nv, cur) > 0 {
+						bomConstraints[k] = nv
+					}
+				}
+			}
+			// 处理该 POM 的 dependencyManagement 中被 import 的 BOM，并合并其约束
+			for _, imp := range b.pomBOMImports(d.group, d.artifact, d.version, downloader) {
+				iv := normalizeVersion(imp.version)
+				if _, err := downloader.FetchPOM(imp.group, imp.artifact, iv); err != nil {
+					continue
+				}
+				if ok, m := b.pomIsPlatform(imp.group, imp.artifact, iv, downloader); ok {
+					for k, v := range m {
+						nv := normalizeVersion(v)
+						if cur, ok2 := bomConstraints[k]; !ok2 || compareVersions(nv, cur) > 0 {
+							bomConstraints[k] = nv
+						}
+					}
+				}
+			}
 			// 从 POM 解析传递依赖
 			for _, t := range b.parsePomDependencies(d.group, d.artifact, d.version, downloader) {
 				normV := normalizeVersion(t.version)
@@ -480,13 +504,62 @@ type pomDepEntry struct {
 	ArtifactID string `xml:"artifactId"`
 	Version    string `xml:"version"`
 	Scope      string `xml:"scope"`
+	Type       string `xml:"type"`
 	Optional   string `xml:"optional"`
 }
 
 type pomDepsModel struct {
 	XMLName      xml.Name        `xml:"project"`
+	Packaging    string          `xml:"packaging"`
 	Dependencies []pomDepEntry   `xml:"dependencies>dependency"`
 	DepMgmt      []pomDepEntry   `xml:"dependencyManagement>dependencies>dependency"`
+}
+
+// pomBOMImports 解析 POM 的 dependencyManagement 中被 import 的 BOM（type=pom, scope=import）
+func (b *Builder) pomBOMImports(group, artifact, version string, downloader *Downloader) []struct{ group, artifact, version string } {
+	groupPath := strings.ReplaceAll(group, ".", "/")
+	pomPath := filepath.Join(downloader.CacheDir, filepath.FromSlash(groupPath), artifact, version, artifact+"-"+version+".pom")
+	data, err := os.ReadFile(pomPath)
+	if err != nil {
+		return nil
+	}
+	var model pomDepsModel
+	if err := xml.Unmarshal(data, &model); err != nil {
+		return nil
+	}
+	var result []struct{ group, artifact, version string }
+	for _, dm := range model.DepMgmt {
+		if strings.EqualFold(strings.TrimSpace(dm.Type), "pom") && strings.EqualFold(strings.TrimSpace(dm.Scope), "import") {
+			if dm.GroupID != "" && dm.ArtifactID != "" && dm.Version != "" {
+				result = append(result, struct{ group, artifact, version string }{dm.GroupID, dm.ArtifactID, dm.Version})
+			}
+		}
+	}
+	return result
+}
+
+// pomIsPlatform 读取已缓存 POM，判断是否为 BOM（packaging=pom）并返回其 dependencyManagement 约束
+func (b *Builder) pomIsPlatform(group, artifact, version string, downloader *Downloader) (bool, map[string]string) {
+	groupPath := strings.ReplaceAll(group, ".", "/")
+	pomPath := filepath.Join(downloader.CacheDir, filepath.FromSlash(groupPath), artifact, version, artifact+"-"+version+".pom")
+	data, err := os.ReadFile(pomPath)
+	if err != nil {
+		return false, nil
+	}
+	var model pomDepsModel
+	if err := xml.Unmarshal(data, &model); err != nil {
+		return false, nil
+	}
+	if strings.TrimSpace(model.Packaging) != "pom" {
+		return false, nil
+	}
+	mgmt := map[string]string{}
+	for _, dm := range model.DepMgmt {
+		if dm.GroupID != "" && dm.ArtifactID != "" && dm.Version != "" {
+			mgmt[dm.GroupID+":"+dm.ArtifactID] = dm.Version
+		}
+	}
+	return true, mgmt
 }
 
 // parsePomDependencies 解析 POM 的传递依赖
@@ -510,7 +583,7 @@ func (b *Builder) parsePomDependencies(group, artifact, version string, download
 			continue
 		}
 		scope := dep.Scope
-		if scope != "compile" && scope != "runtime" && scope != "" {
+		if scope != "compile" && scope != "runtime" && scope != "import" && scope != "" {
 			continue
 		}
 		if hasSuffix(dep.ArtifactID, nonAndroidSuffixes) {
