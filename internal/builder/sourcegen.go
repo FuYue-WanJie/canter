@@ -27,7 +27,7 @@ func SourceGenTask(ctx *engine.BuildContext) *engine.Task {
 			ns = cfg.Namespace
 			applicationID = cfg.ApplicationID
 			versionCode = cfg.VersionCode
-			versionName = cfg.VersionName
+			versionName = cfg.VersionName + cfg.VersionNameSuffix
 			if cfg.Release {
 				buildType = "release"
 			}

@@ -127,6 +127,7 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		appConfig.JvmTarget = mod.Android.JvmTarget
 		appConfig.BuildConfigs = mod.Android.BuildConfigFields
 		appConfig.SelectedFlavor = mod.Android.SelectedFlavor
+		appConfig.VersionNameSuffix = mod.Android.FlavorVersionNameSuffix
 		for _, pl := range mod.Plugins {
 			if pl == "kotlin-parcelize" || pl == "org.jetbrains.kotlin.plugin.parcelize" {
 				appConfig.Parcelize = true

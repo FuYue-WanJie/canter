@@ -156,7 +156,7 @@ func Aapt2LinkTask(ctx *engine.BuildContext) *engine.Task {
 			ns = cfg.Namespace
 			appID = cfg.ApplicationID
 			versionCode = cfg.VersionCode
-			versionName = cfg.VersionName
+			versionName = cfg.VersionName + cfg.VersionNameSuffix
 			minSDKStr = cfg.MinSDK
 			targetSDKStr = cfg.TargetSDK
 		}

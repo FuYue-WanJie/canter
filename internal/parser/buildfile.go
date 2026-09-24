@@ -28,6 +28,7 @@ var (
 	excludeListRe   = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
 	buildConfigFieldRe = regexp.MustCompile(`buildConfigField\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)`)
 	createNameRe        = regexp.MustCompile(`create\s*\(\s*"([^"]*)"\s*\)`)
+	versionNameSuffixRe = regexp.MustCompile(`versionNameSuffix\s*=\s*"([^"]*)"`)
 )
 
 var buildFeaturesKeys = []string{
@@ -199,6 +200,9 @@ func (p BuildFileParser) parseAndroidBlock(content string, module *ModuleConfig)
 			for _, m := range buildConfigFieldRe.FindAllStringSubmatch(first, -1) {
 				android.BuildConfigFields = append(android.BuildConfigFields,
 					m[1]+":"+m[2]+":"+m[3])
+			}
+			if m := versionNameSuffixRe.FindStringSubmatch(first); m != nil {
+				android.FlavorVersionNameSuffix = m[1]
 			}
 		}
 	}

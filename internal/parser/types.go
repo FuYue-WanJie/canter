@@ -32,6 +32,7 @@ type AndroidConfig struct {
 	SigningConfig            string
 	BuildConfigFields        []string // 'type:name:value' 三元组（flavor buildConfigField）
 	SelectedFlavor           string
+	FlavorVersionNameSuffix  string
 }
 
 // ModuleConfig 模块配置
