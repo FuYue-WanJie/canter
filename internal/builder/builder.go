@@ -420,8 +420,9 @@ func (b *Builder) resolveDependencies() error {
 			}
 			// 从 POM 解析传递依赖
 			for _, t := range b.parsePomDependencies(d.group, d.artifact, d.version, downloader) {
-				recordVersion(t.group, t.artifact, t.version)
-				nextQ = append(nextQ, coord{t.group, t.artifact, t.version})
+				normV := normalizeVersion(t.version)
+				recordVersion(t.group, t.artifact, normV)
+				nextQ = append(nextQ, coord{t.group, t.artifact, normV})
 			}
 		}
 		queue = nextQ
