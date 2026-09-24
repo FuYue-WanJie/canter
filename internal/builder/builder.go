@@ -257,6 +257,11 @@ func (b *Builder) Clean() {
 	}
 }
 
+// resolutionCacheFile 解析缓存的落盘路径（放在 clean 目录之外，clean 后仍可复用避免 BFS 重跑）
+func (b *Builder) resolutionCacheFile() string {
+	return b.CacheDir + ".resolution.json"
+}
+
 // resolveDependencies 依赖解析：全图 BFS + 版本冲突消解（GBL: group:artifact 取最高版本）
 func (b *Builder) resolveDependencies() error {
 	depsDir := filepath.Join(b.BuildDir, "deps")
@@ -281,7 +286,7 @@ func (b *Builder) resolveDependencies() error {
 			if strings.Contains(strings.ToLower(dep.Scope), "test") {
 				continue
 			}
-			directDeps = append(directDeps, coord{dep.Group, dep.Artifact, dep.Version})
+			directDeps = append(directDeps, coord{dep.Group, dep.Artifact, normalizeVersion(dep.Version)})
 		}
 	}
 	if kotlinVersion := b.Config.Catalog.Versions["kotlin"]; kotlinVersion != "" {
@@ -315,17 +320,21 @@ func (b *Builder) resolveDependencies() error {
 	}
 	kotlinVer := b.Config.Catalog.Versions["kotlin"]
 	resKey := resolutionKey(directCoords, bomConstraints, kotlinVer)
-	if cached, ok := loadResolutionCache(b.CacheDir, resKey); ok {
+	if cached, ok := loadResolutionCache(b.resolutionCacheFile(), resKey); ok {
+		cached = collapseVariantCoords(cached)
+		matKey := resKey + ":" + coordHash(cached)
 		markerFile := filepath.Join(depsDir, ".canter-reskey")
-		if data, err := os.ReadFile(markerFile); err == nil && string(data) == resKey {
+		if data, err := os.ReadFile(markerFile); err == nil && string(data) == matKey {
 			fmt.Printf("依赖解析: 缓存命中（%d 个依赖，已解压，跳过）\n", len(cached))
 			return nil
 		}
 		fmt.Printf("依赖解析: 缓存命中（%d 个依赖）\n", len(cached))
+		os.RemoveAll(depsDir)
+		os.MkdirAll(depsDir, 0755)
 		if err := b.materializeDeps(cached, depsDir, downloader); err != nil {
 			return err
 		}
-		os.WriteFile(markerFile, []byte(resKey), 0644)
+		os.WriteFile(markerFile, []byte(matKey), 0644)
 		return nil
 	}
 
@@ -347,6 +356,10 @@ func (b *Builder) resolveDependencies() error {
 		return v
 	}
 	recordVersion := func(g, a, v string) {
+		v = normalizeVersion(v)
+		if v == "" {
+			return
+		}
 		gv := getGA(g, a)
 		for _, exist := range gv.versions {
 			if exist == v {
@@ -420,11 +433,15 @@ func (b *Builder) resolveDependencies() error {
 	for _, sd := range selected {
 		selectedCoords = append(selectedCoords, depCoord{sd.g, sd.a, sd.v})
 	}
-	saveResolutionCache(b.CacheDir, resKey, selectedCoords)
+	selectedCoords = collapseVariantCoords(selectedCoords)
+	saveResolutionCache(b.resolutionCacheFile(), resKey, selectedCoords)
+	os.RemoveAll(depsDir)
+	os.MkdirAll(depsDir, 0755)
 	if err := b.materializeDeps(selectedCoords, depsDir, downloader); err != nil {
 		return err
 	}
-	os.WriteFile(filepath.Join(depsDir, ".canter-reskey"), []byte(resKey), 0644)
+	matKey := resKey + ":" + coordHash(selectedCoords)
+	os.WriteFile(filepath.Join(depsDir, ".canter-reskey"), []byte(matKey), 0644)
 	return nil
 }
 

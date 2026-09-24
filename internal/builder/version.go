@@ -163,6 +163,27 @@ func tailIsOldQualifier(tokens []versionToken, start int) bool {
 	return false
 }
 
+// normalizeVersion 规范化 Maven 版本范围：剥离 [ ] ( )，多值取第一个
+// 如 "[2.11.0]" -> "2.11.0"，"[1.0,2.0)" -> "1.0"
+func normalizeVersion(v string) string {
+	v = strings.TrimSpace(v)
+	if v == "" {
+		return v
+	}
+	first := v[0]
+	if first == '[' || first == '(' {
+		// 去掉前括号
+		v = v[1:]
+		// 取逗号前的部分
+		if idx := strings.Index(v, ","); idx >= 0 {
+			v = v[:idx]
+		}
+		// 去掉尾括号
+		v = strings.TrimRight(v, "])")
+	}
+	return strings.TrimSpace(v)
+}
+
 // selectHighestVersion 从候选版本集中选出最高版本；空集返回 ""
 func selectHighestVersion(versions []string) string {
 	if len(versions) == 0 {

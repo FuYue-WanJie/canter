@@ -141,8 +141,7 @@ func copyTree(src, dst string) error {
 		return copyFile(path, target)
 	})
 }
-
-// DexBuildTask D8 打包
+// DexBuildTask D8 打包（合并工程类与依赖类后一次 D8，支持 multidex）
 func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("dexBuild")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
@@ -161,39 +160,9 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 		javaClasses := filepath.Join(ctx.BuildDir, "classes")
 		depsDir := filepath.Join(ctx.BuildDir, "deps")
 
-		populateFromDeps := func() {
-			if entries, err := os.ReadDir(depsDir); err == nil {
-				for _, e := range entries {
-					if !e.IsDir() {
-						continue
-					}
-					classesJar := filepath.Join(depsDir, e.Name(), "classes.jar")
-					if zr, err := zip.OpenReader(classesJar); err == nil {
-						for _, f := range zr.File {
-							if strings.HasSuffix(f.Name, ".class") {
-								rc, err := f.Open()
-								if err == nil {
-									dest := filepath.Join(merged, f.Name)
-									os.MkdirAll(filepath.Dir(dest), 0755)
-									out, err := os.Create(dest)
-									if err == nil {
-										io.Copy(out, rc)
-										out.Close()
-									}
-									rc.Close()
-								}
-							}
-						}
-						zr.Close()
-					}
-				}
-			}
-		}
-
 		// 每次都完整重建 merged_classes，避免陈旧/重复类残留
 		tmp := merged + ".tmp"
 		os.RemoveAll(tmp)
-		// 先合并 Java 类，再合并 Kotlin 类（Kotlin 后写入，同名类 Kotlin 优先）
 		if err := copyTree(javaClasses, tmp); err != nil {
 			fmt.Printf("复制 Java 类失败: %v\n", err)
 			return false
@@ -202,12 +171,43 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 			fmt.Printf("复制 Kotlin 类失败: %v\n", err)
 			return false
 		}
+		// 依赖类：同名类先到先得（避免 KMP 变体重复）
+		if entries, err := os.ReadDir(depsDir); err == nil {
+			for _, e := range entries {
+				if !e.IsDir() {
+					continue
+				}
+				classesJar := filepath.Join(depsDir, e.Name(), "classes.jar")
+				if zr, err := zip.OpenReader(classesJar); err == nil {
+					for _, f := range zr.File {
+						if !strings.HasSuffix(f.Name, ".class") {
+							continue
+						}
+						dest := filepath.Join(tmp, f.Name)
+						if _, err := os.Stat(dest); err == nil {
+							continue // 已存在则跳过，避免重复类
+						}
+						os.MkdirAll(filepath.Dir(dest), 0755)
+						rc, err := f.Open()
+						if err != nil {
+							continue
+						}
+						out, err := os.Create(dest)
+						if err == nil {
+							io.Copy(out, rc)
+							out.Close()
+						}
+						rc.Close()
+					}
+					zr.Close()
+				}
+			}
+		}
 		os.RemoveAll(merged)
 		if err := os.Rename(tmp, merged); err != nil {
 			fmt.Printf("合并类目录失败: %v\n", err)
 			return false
 		}
-		populateFromDeps()
 
 		// 打包 merged_classes.jar
 		jarFile := filepath.Join(ctx.BuildDir, "merged_classes.jar")
@@ -222,8 +222,7 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 				return nil
 			}
 			rel, _ := filepath.Rel(merged, path)
-			relSlash := filepath.ToSlash(rel)
-			fh, err := zw.Create(relSlash)
+			fh, err := zw.Create(filepath.ToSlash(rel))
 			if err != nil {
 				return nil
 			}
@@ -238,27 +237,21 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 		out.Close()
 
 		dexDir := filepath.Join(ctx.BuildDir, "dex")
+		os.RemoveAll(dexDir)
 		os.MkdirAll(dexDir, 0755)
 		minAPI := "23"
 		if ac, ok := ctx.Config.(*AppConfig); ok && ac.MinSDK != "" {
 			minAPI = ac.MinSDK
 		}
 		args := []string{"--lib", ctx.AndroidJar, "--min-api", minAPI, "--output", dexDir, jarFile}
-		cmd := exec.Command(d8, args...)
-		cmdOut, err := cmd.CombinedOutput()
-		if err != nil {
-			outStr := string(cmdOut)
-			if len(outStr) > 3000 {
-				outStr = outStr[len(outStr)-3000:]
-			}
-			fmt.Printf("D8 失败: %s\n", outStr)
+		if err := runD8(d8, args); err != nil {
+			fmt.Printf("D8 失败: %s\n", err)
 			return false
 		}
 		return true
 	}
 	return t
 }
-
 // PackageApkTask 打包 APK
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")

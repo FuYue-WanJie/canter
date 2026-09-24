@@ -166,7 +166,34 @@ func findGradleCachedPOM(group, artifact, version string) string {
 
 // findGradleCachedArtifact 在 Gradle 缓存中查找已下载的 aar/jar
 func findGradleCachedArtifact(group, artifact, version, ext string) string {
-	return findGradleCachedFile(group, artifact, version, artifact+"-"+version+"."+ext)
+	if p := findGradleCachedFile(group, artifact, version, artifact+"-"+version+"."+ext); p != "" {
+		return p
+	}
+	// 回退：Gradle 对 KMP 变体可能用基础名存储文件，按扩展名扫描版本目录
+	home, _ := os.UserHomeDir()
+	if home == "" {
+		return ""
+	}
+	groupPath := strings.ReplaceAll(group, ".", "/")
+	versionDir := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1",
+		filepath.FromSlash(groupPath), artifact, version)
+	entries, err := os.ReadDir(versionDir)
+	if err != nil {
+		return ""
+	}
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		files, _ := os.ReadDir(filepath.Join(versionDir, e.Name()))
+		for _, f := range files {
+			name := f.Name()
+			if strings.HasSuffix(name, "."+ext) && !strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
+				return filepath.Join(versionDir, e.Name(), name)
+			}
+		}
+	}
+	return ""
 }
 
 // findGradleCachedFile 在 Gradle modules-2 缓存中按文件名查找

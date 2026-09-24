@@ -48,8 +48,8 @@ func resolutionKey(direct []depCoord, bomConstraints map[string]string, kotlinVe
 }
 
 // loadResolutionCache 读取解析缓存（键匹配才有效）
-func loadResolutionCache(cacheDir, key string) ([]depCoord, bool) {
-	data, err := os.ReadFile(filepath.Join(cacheDir, "deps-resolution.json"))
+func loadResolutionCache(cacheFile, key string) ([]depCoord, bool) {
+	data, err := os.ReadFile(cacheFile)
 	if err != nil {
 		return nil, false
 	}
@@ -61,8 +61,8 @@ func loadResolutionCache(cacheDir, key string) ([]depCoord, bool) {
 }
 
 // saveResolutionCache 写入解析缓存
-func saveResolutionCache(cacheDir, key string, deps []depCoord) {
-	os.MkdirAll(cacheDir, 0755)
+func saveResolutionCache(cacheFile, key string, deps []depCoord) {
+	os.MkdirAll(filepath.Dir(cacheFile), 0755)
 	sort.Slice(deps, func(i, j int) bool {
 		if deps[i].Group != deps[j].Group {
 			return deps[i].Group < deps[j].Group
@@ -74,10 +74,68 @@ func saveResolutionCache(cacheDir, key string, deps []depCoord) {
 	if err != nil {
 		return
 	}
-	os.WriteFile(filepath.Join(cacheDir, "deps-resolution.json"), data, 0644)
+	os.WriteFile(cacheFile, data, 0644)
 }
 
 // depDirName 依赖解压目录名
 func depDirName(group, artifact string) string {
 	return strings.ReplaceAll(group+"_"+artifact, ".", "_")
+}
+
+// coordHash 计算依赖坐标集合的哈希（用于解压标记失效判断）
+func coordHash(coords []depCoord) string {
+	h := sha256.New()
+	keys := make([]string, 0, len(coords))
+	for _, c := range coords {
+		keys = append(keys, c.Group+":"+c.Artifact+":"+c.Version)
+	}
+	sort.Strings(keys)
+	for _, k := range keys {
+		h.Write([]byte(k + "\n"))
+	}
+	return hex.EncodeToString(h.Sum(nil))
+}
+
+// collapseVariantCoords 折叠 KMP 平台变体：同 base 名只保留一个（优先 -android > 无后缀 > -release > -jvm）
+func collapseVariantCoords(coords []depCoord) []depCoord {
+	baseOf := func(a string) string {
+		for _, s := range []string{"-android", "-jvm", "-release", "-desktop", "-linuxx64", "-macosx64", "-macosarm64", "-windows", "-wasm", "-js", "-metadata"} {
+			if strings.HasSuffix(a, s) {
+				return a[:len(a)-len(s)]
+			}
+		}
+		return a
+	}
+	scoreOf := func(a string) int {
+		switch {
+		case strings.HasSuffix(a, "-android"):
+			return 0
+		case baseOf(a) == a:
+			return 1
+		case strings.HasSuffix(a, "-release"):
+			return 2
+		case strings.HasSuffix(a, "-jvm"):
+			return 3
+		default:
+			return 4
+		}
+	}
+	best := map[string]depCoord{}
+	for _, c := range coords {
+		base := c.Group + ":" + baseOf(c.Artifact)
+		if cur, ok := best[base]; !ok || scoreOf(c.Artifact) < scoreOf(cur.Artifact) {
+			best[base] = c
+		}
+	}
+	out := make([]depCoord, 0, len(best))
+	for _, c := range best {
+		out = append(out, c)
+	}
+	sort.Slice(out, func(i, j int) bool {
+		if out[i].Group != out[j].Group {
+			return out[i].Group < out[j].Group
+		}
+		return out[i].Artifact < out[j].Artifact
+	})
+	return out
 }
