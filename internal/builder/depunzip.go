@@ -24,6 +24,9 @@ func unzipDepTo(group, artifact, path, depsDir string) {
 					extractZipEntry(f, filepath.Join(depDir, "classes.jar"))
 				} else if strings.HasPrefix(f.Name, "res/") {
 					extractZipEntry(f, filepath.Join(depDir, f.Name))
+				} else if strings.HasPrefix(f.Name, "libs/") && strings.HasSuffix(f.Name, ".jar") {
+					// AAR 内嵌 jar（如 emoji2 的 libs/repackaged.jar）需并入 classpath 与 dex
+					extractZipEntry(f, filepath.Join(depDir, f.Name))
 				}
 			}
 			zr.Close()
@@ -58,6 +61,21 @@ func extractZipEntry(f *zip.File, dst string) {
 	}
 	io.Copy(out, rc)
 	out.Close()
+}
+
+// depAuxJars 返回依赖目录下 AAR 内嵌 jar（libs/*.jar）的路径列表
+func depAuxJars(depDir string) []string {
+	entries, err := os.ReadDir(filepath.Join(depDir, "libs"))
+	if err != nil {
+		return nil
+	}
+	var jars []string
+	for _, e := range entries {
+		if !e.IsDir() && strings.HasSuffix(e.Name(), ".jar") {
+			jars = append(jars, filepath.Join(depDir, "libs", e.Name()))
+		}
+	}
+	return jars
 }
 
 // materializeDeps 从缓存坐标下载并解压依赖（下载命中全局缓存时很快）

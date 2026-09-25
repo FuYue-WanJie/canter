@@ -50,7 +50,9 @@ func buildClasspath(ctx *engine.BuildContext) string {
 	if entries, err := os.ReadDir(depsDir); err == nil {
 		for _, e := range entries {
 			if e.IsDir() {
-				parts = append(parts, filepath.Join(depsDir, e.Name(), "classes.jar"))
+				depDir := filepath.Join(depsDir, e.Name())
+				parts = append(parts, filepath.Join(depDir, "classes.jar"))
+				parts = append(parts, depAuxJars(depDir)...)
 			}
 		}
 	}
@@ -176,34 +178,43 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 			}
 		}
 		// 依赖类：同名类先到先得（避免 KMP 变体重复）
+		extractJarClasses := func(jarPath string) {
+			zr, err := zip.OpenReader(jarPath)
+			if err != nil {
+				return
+			}
+			defer zr.Close()
+			for _, f := range zr.File {
+				if !strings.HasSuffix(f.Name, ".class") {
+					continue
+				}
+				dest := filepath.Join(tmp, f.Name)
+				if _, err := os.Stat(dest); err == nil {
+					continue // 已存在则跳过，避免重复类
+				}
+				os.MkdirAll(filepath.Dir(dest), 0755)
+				rc, err := f.Open()
+				if err != nil {
+					continue
+				}
+				out, err := os.Create(dest)
+				if err == nil {
+					io.Copy(out, rc)
+					out.Close()
+				}
+				rc.Close()
+			}
+		}
 		if entries, err := os.ReadDir(depsDir); err == nil {
 			for _, e := range entries {
 				if !e.IsDir() {
 					continue
 				}
-				classesJar := filepath.Join(depsDir, e.Name(), "classes.jar")
-				if zr, err := zip.OpenReader(classesJar); err == nil {
-					for _, f := range zr.File {
-						if !strings.HasSuffix(f.Name, ".class") {
-							continue
-						}
-						dest := filepath.Join(tmp, f.Name)
-						if _, err := os.Stat(dest); err == nil {
-							continue // 已存在则跳过，避免重复类
-						}
-						os.MkdirAll(filepath.Dir(dest), 0755)
-						rc, err := f.Open()
-						if err != nil {
-							continue
-						}
-						out, err := os.Create(dest)
-						if err == nil {
-							io.Copy(out, rc)
-							out.Close()
-						}
-						rc.Close()
-					}
-					zr.Close()
+				depDir := filepath.Join(depsDir, e.Name())
+				extractJarClasses(filepath.Join(depDir, "classes.jar"))
+				// AAR 内嵌 jar（如 emoji2 的 libs/repackaged.jar）
+				for _, aux := range depAuxJars(depDir) {
+					extractJarClasses(aux)
 				}
 			}
 		}
