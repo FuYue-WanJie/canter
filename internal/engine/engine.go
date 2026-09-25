@@ -4,13 +4,82 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
-	"fmt"
 	"os"
 	"path/filepath"
 	"sort"
 	"strconv"
+	"strings"
+	"sync"
 	"time"
 )
+
+// hashCache 内容哈希缓存：以 (size,mtime) 记忆化，避免未变文件重复读盘
+type hashCache struct {
+	mu      sync.Mutex
+	file    string
+	entries map[string]string // absPath -> "size:mtime:sha256"
+	dirty   bool
+}
+
+var hashCaches sync.Map // cacheDir -> *hashCache
+
+func loadHashCache(cacheDir string) *hashCache {
+	if v, ok := hashCaches.Load(cacheDir); ok {
+		return v.(*hashCache)
+	}
+	hc := &hashCache{file: filepath.Join(cacheDir, ".hashcache"), entries: map[string]string{}}
+	if data, err := os.ReadFile(hc.file); err == nil {
+		for _, line := range strings.Split(string(data), "\n") {
+			if line == "" {
+				continue
+			}
+			if idx := strings.Index(line, "\t"); idx > 0 {
+				hc.entries[line[:idx]] = line[idx+1:]
+			}
+		}
+	}
+	hashCaches.Store(cacheDir, hc)
+	return hc
+}
+
+// hashOf 返回文件内容 sha256；若 (size,mtime) 未变则复用缓存
+func (hc *hashCache) hashOf(path string, size int64, mtime float64) string {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	sig := strconv.FormatInt(size, 10) + ":" + formatFloat(mtime)
+	if v, ok := hc.entries[path]; ok {
+		if idx := strings.LastIndex(v, ":"); idx > 0 && v[:idx] == sig {
+			return v[idx+1:]
+		}
+	}
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ""
+	}
+	sum := sha256.Sum256(data)
+	h := hex.EncodeToString(sum[:])
+	hc.entries[path] = sig + ":" + h
+	hc.dirty = true
+	return h
+}
+
+func (hc *hashCache) flush() {
+	hc.mu.Lock()
+	defer hc.mu.Unlock()
+	if !hc.dirty {
+		return
+	}
+	var sb strings.Builder
+	for k, v := range hc.entries {
+		sb.WriteString(k)
+		sb.WriteByte('\t')
+		sb.WriteString(v)
+		sb.WriteByte('\n')
+	}
+	os.MkdirAll(filepath.Dir(hc.file), 0755)
+	os.WriteFile(hc.file, []byte(sb.String()), 0644)
+	hc.dirty = false
+}
 
 // FileSnapshot 文件快照（mtime + size + hash 摘要）
 type FileSnapshot struct {
@@ -203,23 +272,22 @@ func (t *Task) AddDependency(name string) {
 	t.DependsOn[name] = true
 }
 
-// ComputeInputSignature 计算输入签名（SHA-256）
-func (t *Task) ComputeInputSignature() string {
+// ComputeInputSignature 计算输入签名（路径 + 文件内容 sha256，内容按 mtime/size 记忆化）
+func (t *Task) ComputeInputSignature(cacheDir string) string {
+	hc := loadHashCache(cacheDir)
 	hasher := sha256.New()
 	type fileEntry struct {
-		path  string
-		mtime float64
-		size  int64
+		path string
+		hash string
 	}
 	var entries []fileEntry
 
 	for _, f := range t.InputFiles {
 		if info, err := os.Stat(f); err == nil {
-			entries = append(entries, fileEntry{
-				path:  f,
-				mtime: float64(info.ModTime().UnixNano()) / 1e9,
-				size:  info.Size(),
-			})
+			h := hc.hashOf(f, info.Size(), float64(info.ModTime().UnixNano())/1e9)
+			if h != "" {
+				entries = append(entries, fileEntry{path: f, hash: h})
+			}
 		}
 	}
 	for _, d := range t.InputDirs {
@@ -232,30 +300,20 @@ func (t *Task) ComputeInputSignature() string {
 				if rerr != nil {
 					return nil
 				}
-				entries = append(entries, fileEntry{
-					path:  filepath.ToSlash(rel),
-					mtime: float64(info.ModTime().UnixNano()) / 1e9,
-					size:  info.Size(),
-				})
+				h := hc.hashOf(path, info.Size(), float64(info.ModTime().UnixNano())/1e9)
+				if h != "" {
+					entries = append(entries, fileEntry{path: filepath.ToSlash(rel), hash: h})
+				}
 				return nil
 			})
 		}
 	}
 
-	sort.Slice(entries, func(i, j int) bool {
-		if entries[i].path != entries[j].path {
-			return entries[i].path < entries[j].path
-		}
-		if entries[i].mtime != entries[j].mtime {
-			return entries[i].mtime < entries[j].mtime
-		}
-		return entries[i].size < entries[j].size
-	})
-
+	sort.Slice(entries, func(i, j int) bool { return entries[i].path < entries[j].path })
 	for _, e := range entries {
-		line := fmt.Sprintf("%s|%s|%s", e.path, formatFloat(e.mtime), strconv.FormatInt(e.size, 10))
-		hasher.Write([]byte(line))
+		hasher.Write([]byte(e.path + "|" + e.hash + "\n"))
 	}
+	hc.flush()
 	return hex.EncodeToString(hasher.Sum(nil))
 }
 
@@ -277,7 +335,7 @@ func (t *Task) IsUpToDate(cacheDir string) bool {
 	if err := json.Unmarshal(data, &cached); err != nil {
 		return false
 	}
-	if t.ComputeInputSignature() != cached.InputSignature {
+	if t.ComputeInputSignature(cacheDir) != cached.InputSignature {
 		return false
 	}
 	for _, f := range t.OutputFiles {
@@ -300,7 +358,7 @@ func (t *Task) SaveCache(cacheDir string) error {
 	}
 	cache := taskCache{
 		Name:           t.Name,
-		InputSignature: t.ComputeInputSignature(),
+		InputSignature: t.ComputeInputSignature(cacheDir),
 		Timestamp:      float64(time.Now().UnixNano()) / 1e9,
 	}
 	cache.Outputs.Files = t.OutputFiles
