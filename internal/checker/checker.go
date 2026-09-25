@@ -339,16 +339,14 @@ func (c *ToolchainChecker) CheckKotlinCompiler(config *parser.ProjectConfig) Che
 		kotlinc = p
 	} else {
 		home, _ := os.UserHomeDir()
-		cacheDir := filepath.Join(home, ".gradle", "caches")
-		filepath.Walk(cacheDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || kotlinc != "" {
-				return nil
-			}
-			if !info.IsDir() && strings.HasPrefix(info.Name(), "kotlin-compiler-embeddable-") && strings.HasSuffix(info.Name(), ".jar") {
-				kotlinc = path
-			}
-			return nil
-		})
+		// 优先自有工具链目录（纯镜像构建时使用）
+		kotlinc = findFileUnder(filepath.Join(home, ".canter", "toolchain"),
+			"kotlin-compiler-embeddable-", ".jar")
+		// 回退 Gradle 缓存（可用 CANTER_NO_GRADLE_CACHE=1 禁用）
+		if kotlinc == "" && os.Getenv("CANTER_NO_GRADLE_CACHE") == "" {
+			kotlinc = findFileUnder(filepath.Join(home, ".gradle", "caches"),
+				"kotlin-compiler-embeddable-", ".jar")
+		}
 	}
 
 	kotlinVersion := config.Catalog.Versions["kotlin"]
@@ -407,8 +405,10 @@ func (c *ToolchainChecker) CheckDependencies(config *parser.ProjectConfig) []Mis
 			}
 			gradlePath := filepath.Join(gradleCache, dep.Group, dep.Artifact, dep.Version)
 			mbPath := filepath.Join(mbCache, strings.ReplaceAll(dep.Group, ".", "/"), dep.Artifact, dep.Version)
-			if _, err := os.Stat(gradlePath); err == nil {
-				continue
+			if os.Getenv("CANTER_NO_GRADLE_CACHE") == "" {
+				if _, err := os.Stat(gradlePath); err == nil {
+					continue
+				}
 			}
 			if _, err := os.Stat(mbPath); err == nil {
 				continue
@@ -512,6 +512,23 @@ func (c *ToolchainChecker) SuggestFixCommands() []string {
 		}
 	}
 	return commands
+}
+
+// findFileUnder 在目录下递归查找首个名字以 prefix 开头、以 suffix 结尾的文件
+func findFileUnder(root, prefix, suffix string) string {
+	var found string
+	filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+		if err != nil || found != "" || info.IsDir() {
+			return nil
+		}
+		name := info.Name()
+		if strings.HasPrefix(name, prefix) && strings.HasSuffix(name, suffix) &&
+			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
+			found = path
+		}
+		return nil
+	})
+	return found
 }
 
 func formatCompileSDK(sdk float64) string {

@@ -98,9 +98,9 @@ func selectModuleVariant(m *gradleModule) *struct {
 }
 
 // parseModuleDeps 读取 .module 文件，返回其依赖与约束
-func (b *Builder) parseModuleDeps(group, artifact, version string) (deps []struct{ group, artifact, version string }, constraints map[string]string) {
-	path := findGradleModuleFile(group, artifact, version)
-	if path == "" {
+func (b *Builder) parseModuleDeps(downloader *Downloader, group, artifact, version string) (deps []struct{ group, artifact, version string }, constraints map[string]string) {
+	path, err := downloader.FetchModule(group, artifact, version)
+	if err != nil || path == "" {
 		return nil, nil
 	}
 	data, err := os.ReadFile(path)

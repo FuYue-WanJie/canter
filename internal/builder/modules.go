@@ -44,7 +44,7 @@ func compileLibraryModule(ctx *engine.BuildContext, mod parser.ModuleConfig) str
 	os.MkdirAll(baseOut, 0755)
 
 	// 增量缓存：源码及 classpath 未变则跳过编译
-	sig := librarySourceSignature(javaSources, ktSources, ctx.AndroidJar)
+	sig := librarySourceSignature(javaSources, ktSources, ctx.AndroidJar, ctx.KotlinVersion)
 	sigFile := filepath.Join(baseOut, ".canter-sig")
 	if data, err := os.ReadFile(sigFile); err == nil && string(data) == sig && dirHasClass(baseOut) {
 		fmt.Printf("库模块 %s: 缓存命中，跳过编译\n", mod.Name)
@@ -52,8 +52,9 @@ func compileLibraryModule(ctx *engine.BuildContext, mod parser.ModuleConfig) str
 	}
 
 	// 库模块的 classpath：android.jar + kotlin-stdlib
+	tc := ToolchainFor(ctx)
 	cp := ctx.AndroidJar
-	if stdlib := findKotlinStdlibJar(); stdlib != "" {
+	if stdlib := tc.KotlinStdlibJar(); stdlib != "" {
 		cp += string(os.PathListSeparator) + stdlib
 	}
 
@@ -74,12 +75,12 @@ func compileLibraryModule(ctx *engine.BuildContext, mod parser.ModuleConfig) str
 
 	// kotlinc 编译 Kotlin 源码
 	if hasKotlin {
-		compilerJar := findKotlinCompilerJar()
+		compilerJar := tc.KotlinCompilerJar()
 		if compilerJar == "" {
 			fmt.Printf("库模块 %s：未找到 kotlin 编译器，跳过\n", mod.Name)
 			return ""
 		}
-		compilerCp := collectKotlinRuntimeJars(compilerJar)
+		compilerCp := tc.CompilerClasspath(compilerJar)
 		javaBin := "java"
 		if ctx.JavaHome != "" {
 			javaBin = filepath.Join(ctx.JavaHome, "bin", "java")
@@ -104,7 +105,7 @@ func compileLibraryModule(ctx *engine.BuildContext, mod parser.ModuleConfig) str
 }
 
 // librarySourceSignature 库模块源码 + classpath 的签名
-func librarySourceSignature(javaSources, ktSources []string, androidJar string) string {
+func librarySourceSignature(javaSources, ktSources []string, androidJar, kotlinVersion string) string {
 	h := sha256.New()
 	all := append(append([]string{}, javaSources...), ktSources...)
 	sort.Strings(all)
@@ -116,6 +117,7 @@ func librarySourceSignature(javaSources, ktSources []string, androidJar string) 
 		}
 	}
 	h.Write([]byte("#" + androidJar))
+	h.Write([]byte("#kotlin=" + kotlinVersion))
 	return hex.EncodeToString(h.Sum(nil))
 }
 

@@ -97,7 +97,8 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		if ctx.JavaHome != "" {
 			javaBin = filepath.Join(ctx.JavaHome, "bin", "java")
 		}
-		compilerJar := findKotlinCompilerJar()
+		tc := ToolchainFor(ctx)
+		compilerJar := tc.KotlinCompilerJar()
 		if compilerJar == "" {
 			fmt.Println("警告: 未找到 kotlin-compiler-embeddable.jar，跳过 Kotlin 编译")
 			return false
@@ -107,7 +108,7 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		os.MkdirAll(out, 0755)
 
 		// 运行时 classpath：compiler + 其依赖的 stdlib/reflect/script-runtime 等 jar
-		compilerCp := collectKotlinRuntimeJars(compilerJar)
+		compilerCp := tc.CompilerClasspath(compilerJar)
 		classpath := buildClasspath(ctx)
 		classpath = withJavaClassesOutput(classpath, ctx)
 		classpath = withAndroidJar(classpath, ctx)
@@ -117,7 +118,7 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		if ac, ok := ctx.Config.(*AppConfig); ok && ac.Parcelize {
 			parcelize = true
 			// parcelize 注解库在编译 classpath 上
-			if rt := findParcelizeRuntimeJar(); rt != "" {
+			if rt := tc.ParcelizeRuntimeJar(); rt != "" {
 				classpath += string(os.PathListSeparator) + rt
 			}
 		}
@@ -133,19 +134,19 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		}
 		// kotlin-parcelize 编译器插件
 		if parcelize {
-			if pj := findParcelizeCompilerJar(); pj != "" {
+			if pj := tc.ParcelizeCompilerJar(); pj != "" {
 				args = append(args, "-Xplugin="+pj)
 			}
 		}
 		// Compose 编译器插件
 		if ac, ok := ctx.Config.(*AppConfig); ok && ac.Compose {
-			if cj := findComposeCompilerJar(); cj != "" {
+			if cj := tc.ComposeCompilerJar(); cj != "" {
 				args = append(args, "-Xplugin="+cj)
 			}
 		}
 		// kotlin-serialization 编译器插件
 		if ac, ok := ctx.Config.(*AppConfig); ok && ac.Serialization {
-			if sj := findSerializationCompilerJar(); sj != "" {
+			if sj := tc.SerializationCompilerJar(); sj != "" {
 				args = append(args, "-Xplugin="+sj)
 			}
 		}
@@ -160,182 +161,6 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 		return true
 	}
 	return t
-}
-
-// findSerializationCompilerJar 从 Gradle 缓存中找 kotlin-serialization 编译器插件（embeddable）
-func findSerializationCompilerJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	var found string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-serialization-compiler-plugin-embeddable-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			if found == "" || name > found {
-				found = path
-			}
-		}
-		return nil
-	})
-	return found
-}
-
-// findComposeCompilerJar 从 Gradle 缓存中找 Compose 编译器插件（embeddable）
-func findComposeCompilerJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	var found string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-compose-compiler-plugin-embeddable-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			if found == "" || name > found {
-				found = path
-			}
-		}
-		return nil
-	})
-	return found
-}
-
-// findParcelizeRuntimeJar 从 Gradle 缓存中找 kotlin-parcelize-runtime 注解库
-func findParcelizeRuntimeJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	var found string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-parcelize-runtime-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			if found == "" || name > found {
-				found = path
-			}
-		}
-		return nil
-	})
-	return found
-}
-
-// findParcelizeCompilerJar 从 Gradle 缓存中找 kotlin-parcelize-compiler 插件 jar
-func findParcelizeCompilerJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	var found string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-parcelize-compiler-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			if found == "" || name > found {
-				found = path
-			}
-		}
-		return nil
-	})
-	return found
-}
-
-// findKotlinCompilerJar 从 Gradle 缓存中找 kotlin-compiler-embeddable jar（取最高版本）
-func findKotlinCompilerJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	var found string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-compiler-embeddable-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			if found == "" || name > found {
-				found = path
-			}
-		}
-		return nil
-	})
-	return found
-}
-
-// collectKotlinRuntimeJars 收集运行 K2JVMCompiler 所需的所有依赖 jar（stdlib/reflect/script-runtime 等）
-func collectKotlinRuntimeJars(compilerJar string) string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1")
-	saw := map[string]string{} // name -> path
-	knownPrefixes := []string{
-		"kotlin-stdlib-", "kotlin-reflect-", "kotlin-script-runtime-",
-		"kotlin-scripting-common-", "kotlin-scripting-jvm-",
-		"kotlin-scripting-compiler-embeddable-", "kotlin-scripting-compiler-impl-embeddable-",
-		"trove4j-", "kotlinx-coroutines-core-", "annotations-",
-	}
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if !strings.HasSuffix(name, ".jar") || strings.Contains(name, "sources") || strings.Contains(name, "javadoc") {
-			return nil
-		}
-		for _, p := range knownPrefixes {
-			if strings.HasPrefix(name, p) {
-				// 有版本差异时取最新（按名字排序取最高的）
-				existing, ok := saw[name]
-				if !ok || name > existing {
-					saw[name] = path
-				}
-				break
-			}
-		}
-		return nil
-	})
-
-	var jars []string
-	jars = append(jars, compilerJar)
-	keys := make([]string, 0, len(saw))
-	for k := range saw {
-		keys = append(keys, k)
-	}
-	sort.Strings(keys)
-	for _, k := range keys {
-		jars = append(jars, saw[k])
-	}
-	if len(jars) <= 1 {
-		return compilerJar
-	}
-	return strings.Join(jars, string(os.PathListSeparator))
-}
-
-// findKotlinStdlibJar 从 Gradle 缓存中找核心 kotlin-stdlib jar（排除 jdk7/jdk8/common，优先 2.x 最新）
-func findKotlinStdlibJar() string {
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1")
-	var latest string
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-stdlib-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") &&
-			!strings.Contains(name, "-jdk7") && !strings.Contains(name, "-jdk8") &&
-			!strings.HasPrefix(name, "kotlin-stdlib-common") {
-			if latest == "" || name > latest {
-				latest = path
-			}
-		}
-		return nil
-	})
-	return latest
 }
 
 // getJvmTarget 从 AppConfig 提取 JVM 编译目标（如 "17"），为空时回退 "17"

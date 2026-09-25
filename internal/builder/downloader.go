@@ -26,18 +26,20 @@ const JitpackRepo = "https://jitpack.io"
 
 // Downloader 依赖下载器
 type Downloader struct {
-	Repos     []string
-	CacheDir  string
-	client    *http.Client
+	Repos         []string
+	CacheDir      string
+	NoGradleCache bool
+	client        *http.Client
 }
 
 // NewDownloader 创建下载器
 func NewDownloader(repos []string, cacheDir string) *Downloader {
 	os.MkdirAll(cacheDir, 0755)
 	return &Downloader{
-		Repos:    repos,
-		CacheDir: cacheDir,
-		client:   &http.Client{Timeout: 60 * time.Second},
+		Repos:         repos,
+		CacheDir:      cacheDir,
+		NoGradleCache: os.Getenv("CANTER_NO_GRADLE_CACHE") != "",
+		client:        &http.Client{Timeout: 60 * time.Second},
 	}
 }
 
@@ -87,16 +89,14 @@ func aarClassesJarHasClass(aarPath string) bool {
 	return false
 }
 
-// IsStubAAR 判断是否为 stub AAR（classes.jar 缺失或为空，无实际类实现）
-func (d *Downloader) IsStubAAR(aarPath string) bool {
-	if !strings.HasSuffix(aarPath, ".aar") {
+// isZipFile 判断文件是否为可解析的 zip（用于接受 classes.jar 为空的真实 AAR/JAR）
+func isZipFile(p string) bool {
+	zr, err := zip.OpenReader(p)
+	if err != nil {
 		return false
 	}
-	// 若 AAR 的 classes.jar 内没有任何 .class，视为 stub
-	if !aarClassesJarHasClass(aarPath) {
-		return true
-	}
-	return false
+	zr.Close()
+	return true
 }
 
 // IsValidArtifact 判断 artifact 是否有效
@@ -128,12 +128,14 @@ func (d *Downloader) FetchPOM(group, artifact, version string) (string, error) {
 		return pomPath, nil
 	}
 	// 优先复用 Gradle 已缓存的 POM（避免网络）
-	if src := findGradleCachedPOM(group, artifact, version); src != "" {
-		os.MkdirAll(filepath.Dir(pomPath), 0755)
-		if copyFile(src, pomPath) == nil {
-			return pomPath, nil
+	if !d.NoGradleCache {
+		if src := findGradleCachedPOM(group, artifact, version); src != "" {
+			os.MkdirAll(filepath.Dir(pomPath), 0755)
+			if copyFile(src, pomPath) == nil {
+				return pomPath, nil
+			}
+			return src, nil
 		}
-		return src, nil
 	}
 	client := &http.Client{Timeout: 5 * time.Second}
 	for _, repo := range d.Repos {
@@ -157,6 +159,49 @@ func (d *Downloader) FetchPOM(group, artifact, version string) (string, error) {
 		return pomPath, nil
 	}
 	return "", fmt.Errorf("pom not found: %s:%s:%s", group, artifact, version)
+}
+
+// FetchModule 获取 Gradle Module Metadata（.module）：
+// Canter 缓存 → Gradle 缓存（可禁用）→ 网络。找不到时返回错误（.module 为可选）。
+func (d *Downloader) FetchModule(group, artifact, version string) (string, error) {
+	groupPath := strings.ReplaceAll(group, ".", "/")
+	name := artifact + "-" + version + ".module"
+	modPath := filepath.Join(d.CacheDir, filepath.FromSlash(groupPath), artifact, version, name)
+	if fi, err := os.Stat(modPath); err == nil && !fi.IsDir() {
+		return modPath, nil
+	}
+	if !d.NoGradleCache {
+		if src := findGradleModuleFile(group, artifact, version); src != "" {
+			os.MkdirAll(filepath.Dir(modPath), 0755)
+			if copyFile(src, modPath) == nil {
+				return modPath, nil
+			}
+			return src, nil
+		}
+	}
+	client := &http.Client{Timeout: 5 * time.Second}
+	for _, repo := range d.Repos {
+		url := fmt.Sprintf("%s/%s/%s/%s/%s", strings.TrimRight(repo, "/"), groupPath, artifact, version, name)
+		resp, err := client.Get(url)
+		if err != nil {
+			continue
+		}
+		if resp.StatusCode != http.StatusOK {
+			resp.Body.Close()
+			continue
+		}
+		os.MkdirAll(filepath.Dir(modPath), 0755)
+		out, cerr := os.Create(modPath)
+		if cerr != nil {
+			resp.Body.Close()
+			continue
+		}
+		io.Copy(out, resp.Body)
+		out.Close()
+		resp.Body.Close()
+		return modPath, nil
+	}
+	return "", fmt.Errorf("module metadata not found: %s:%s:%s", group, artifact, version)
 }
 
 // findGradleCachedPOM 在 Gradle 缓存中查找已下载的 POM
@@ -227,21 +272,35 @@ func (d *Downloader) Download(group, artifact, version string) (string, error) {
 
 	groupPath := strings.ReplaceAll(group, ".", "/")
 
-	// 缓存检查（Canter 缓存 → Gradle 缓存）
+	// 缓存检查（Canter 缓存 → Gradle 缓存）。
+	// stubFallback 记录"已成功获取但 classes.jar 为空"的构件：
+	// 这类构件（如 androidx core-ktx 1.19.0 已成为空壳，真实类在 core）在无更好变体时应当接受，
+	// 而不是报失败。优先返回含类的变体（如 KMP 的 -android）。
+	var stubFallback string
 	for _, artName := range []string{artifact, artifact + "-android", artifact + "-release", artifact + "-jvm"} {
 		for _, ext := range []string{"aar", "jar"} {
 			path := filepath.Join(d.CacheDir, filepath.FromSlash(groupPath), artName, version, artName+"-"+version+"."+ext)
-			if _, err := os.Stat(path); err == nil && d.IsValidArtifact(path) {
-				return path, nil
+			if _, err := os.Stat(path); err == nil {
+				if d.IsValidArtifact(path) {
+					return path, nil
+				}
+				if stubFallback == "" && isZipFile(path) {
+					stubFallback = path
+				}
 			}
 			// 复用 Gradle 已缓存的 artifact（避免网络下载）
-			if src := findGradleCachedArtifact(group, artName, version, ext); src != "" {
-				if d.IsValidArtifact(src) {
-					os.MkdirAll(filepath.Dir(path), 0755)
-					if copyFile(src, path) == nil {
-						return path, nil
+			if !d.NoGradleCache {
+				if src := findGradleCachedArtifact(group, artName, version, ext); src != "" {
+					if d.IsValidArtifact(src) {
+						os.MkdirAll(filepath.Dir(path), 0755)
+						if copyFile(src, path) == nil {
+							return path, nil
+						}
+						return src, nil
 					}
-					return src, nil
+					if stubFallback == "" && isZipFile(src) {
+						stubFallback = src
+					}
 				}
 			}
 		}
@@ -272,6 +331,9 @@ func (d *Downloader) Download(group, artifact, version string) (string, error) {
 	}
 	if bestResult != "" {
 		return bestResult, nil
+	}
+	if stubFallback != "" {
+		return stubFallback, nil
 	}
 	return "", fmt.Errorf("无法下载 %s:%s:%s", group, artifact, version)
 }
@@ -344,9 +406,6 @@ func (d *Downloader) downloadFromRepo(group, artifact, version, repo string) (st
 		if err := d.downloadTo(artURL, artPath); err != nil {
 			return "", err
 		}
-	}
-	if d.IsStubAAR(artPath) {
-		return "", fmt.Errorf("stub AAR: %s", artPath)
 	}
 	return artPath, nil
 }

@@ -166,18 +166,27 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		}
 	}
 
+	mirrorMgr := mirror.NewManager("")
+	kotlinVersion := ""
+	if config.Catalog != nil {
+		kotlinVersion = config.Catalog.Versions["kotlin"]
+	}
+
 	ctx := &engine.BuildContext{
-		ProjectDir:   projectDir,
-		BuildDir:     buildDir,
-		CacheDir:     cacheDir,
-		AndroidSDK:   sdk,
-		AndroidJar:   filepath.Join(platformDir, "android.jar"),
-		BuildTools:   btDir,
-		JavaHome:     os.Getenv("JAVA_HOME"),
-		ModuleDir:    moduleDir,
-		Repositories: config.Repositories,
-		Config:       appConfig,
-		StartTime:    time.Now(),
+		ProjectDir:    projectDir,
+		BuildDir:      buildDir,
+		CacheDir:      cacheDir,
+		AndroidSDK:    sdk,
+		AndroidJar:    filepath.Join(platformDir, "android.jar"),
+		BuildTools:    btDir,
+		JavaHome:      os.Getenv("JAVA_HOME"),
+		ModuleDir:     moduleDir,
+		Repositories:  mirrorMgr.GetRepositories(),
+		Config:        appConfig,
+		StartTime:     time.Now(),
+		ToolchainDir:  filepath.Join(home, ".canter", "toolchain"),
+		KotlinVersion: kotlinVersion,
+		NoGradleCache: os.Getenv("CANTER_NO_GRADLE_CACHE") != "",
 	}
 
 	return &Builder{
@@ -186,7 +195,7 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		BuildDir:   buildDir,
 		CacheDir:   cacheDir,
 		Context:    ctx,
-		MirrorMgr:  mirror.NewManager(""),
+		MirrorMgr:  mirrorMgr,
 		Home:       home,
 	}
 }
@@ -453,7 +462,7 @@ func (b *Builder) resolveDependencies() error {
 				nextQ = append(nextQ, coord{t.group, t.artifact, normV})
 			}
 			// 从 Gradle Module Metadata 解析依赖与约束（KMP 库真实依赖常仅在此）
-			mdeps, mcons := b.parseModuleDeps(d.group, d.artifact, d.version)
+			mdeps, mcons := b.parseModuleDeps(downloader, d.group, d.artifact, d.version)
 			for _, t := range mdeps {
 				normV := normalizeVersion(t.version)
 				recordVersion(t.group, t.artifact, normV)

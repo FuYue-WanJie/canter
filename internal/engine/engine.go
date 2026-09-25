@@ -188,6 +188,11 @@ type BuildContext struct {
 	Repositories []string
 	Config       interface{}
 	StartTime    time.Time
+
+	// 工具链解析相关（见 builder.Toolchain）
+	ToolchainDir  string // 工具链 jar 的自有下载目录（~/.canter/toolchain）
+	KotlinVersion string // 项目声明的 Kotlin 版本（libs.versions.toml [versions].kotlin）
+	NoGradleCache bool   // 为 true 时禁用 ~/.gradle/caches 复用（纯镜像构建）
 }
 
 // ModuleDirOrProject 返回模块目录（为空时回退项目目录）

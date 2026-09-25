@@ -58,19 +58,10 @@ func buildClasspath(ctx *engine.BuildContext) string {
 	for _, d := range projectLibClassDirs(ctx) {
 		parts = append(parts, d)
 	}
-	home, _ := os.UserHomeDir()
-	gradleCache := filepath.Join(home, ".gradle", "caches")
-	filepath.Walk(gradleCache, func(path string, info os.FileInfo, err error) error {
-		if err != nil || info.IsDir() {
-			return nil
-		}
-		name := info.Name()
-		if strings.HasPrefix(name, "kotlin-stdlib-") && strings.HasSuffix(name, ".jar") &&
-			!strings.Contains(name, "sources") && !strings.Contains(name, "javadoc") {
-			parts = append(parts, path)
-		}
-		return nil
-	})
+	// Kotlin 标准库：严格使用项目声明的 Kotlin 版本（单一版本）
+	if stdlib := ToolchainFor(ctx).KotlinStdlibJar(); stdlib != "" {
+		parts = append(parts, stdlib)
+	}
 	return strings.Join(parts, ":")
 }
 
