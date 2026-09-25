@@ -460,13 +460,16 @@ func SignApkTask(ctx *engine.BuildContext) *engine.Task {
 			return true
 		}
 
+		// 先对齐再签名（AGP 流程）。未压缩的 .so 需 4KiB 页对齐才能被直接 mmap
+		input := zipAlignApk(ctx, appDebug)
+
 		args := []string{
 			"sign",
 			"--ks", keystore,
 			"--ks-pass", "pass:android",
 			"--key-pass", "pass:android",
 			"--out", appSigned,
-			appDebug,
+			input,
 		}
 		cmd := exec.Command(apksigner, args...)
 		if out, err := cmd.CombinedOutput(); err != nil {
@@ -476,6 +479,23 @@ func SignApkTask(ctx *engine.BuildContext) *engine.Task {
 		return true
 	}
 	return t
+}
+
+// zipAlignApk 用 zipalign 对 APK 做 4 字节 + 未压缩 .so 页对齐（对齐 AGP）。
+// 返回对齐后的 APK 路径；zipalign 缺失或失败时返回原路径。
+func zipAlignApk(ctx *engine.BuildContext, apk string) string {
+	zipalign := filepath.Join(ctx.BuildTools, "zipalign")
+	if _, err := os.Stat(zipalign); err != nil {
+		fmt.Println("警告: zipalign 未找到，跳过对齐")
+		return apk
+	}
+	aligned := filepath.Join(ctx.BuildDir, "app-aligned.apk")
+	out, err := exec.Command(zipalign, "-f", "-p", "4", apk, aligned).CombinedOutput()
+	if err != nil {
+		fmt.Printf("警告: zipalign 失败，使用未对齐 APK: %s\n", strings.TrimSpace(string(out)))
+		return apk
+	}
+	return aligned
 }
 
 func contains(list []string, s string) bool {
