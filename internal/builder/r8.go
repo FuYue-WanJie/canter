@@ -85,7 +85,7 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 		if ctx.JavaHome != "" {
 			javaBin = filepath.Join(ctx.JavaHome, "bin", "java")
 		}
-		cmd := exec.Command(javaBin, cmdArgs...)
+		cmd := exec.Command(javaBin, append([]string{jvmXmxFlag()}, cmdArgs...)...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {
 			outStr := string(out)

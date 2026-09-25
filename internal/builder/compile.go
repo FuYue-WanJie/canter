@@ -151,7 +151,7 @@ func KotlinCompileTask(ctx *engine.BuildContext) *engine.Task {
 			}
 		}
 		args = append(args, ktSources...)
-		cmd := exec.Command(javaBin, args...)
+		cmd := exec.Command(javaBin, append([]string{jvmXmxFlag()}, args...)...)
 		cmdOut, err := cmd.CombinedOutput()
 		if err != nil {
 			fmt.Printf("Kotlin 编译失败: %s\n", strings.TrimSpace(string(cmdOut)))

@@ -7,7 +7,8 @@ import (
 
 // runD8 执行 D8，失败时返回日志（保留头部与尾部，中间省略）
 func runD8(d8 string, args []string) error {
-	cmd := exec.Command(d8, args...)
+	// d8 脚本默认 -Xmx2G，堆偏小时大工程 GC 频繁；前置 -JXmx 覆盖
+	cmd := exec.Command(d8, append(d8JVMFlags(), args...)...)
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		s := string(out)

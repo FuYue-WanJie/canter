@@ -92,7 +92,7 @@ func compileLibraryModule(ctx *engine.BuildContext, mod parser.ModuleConfig) str
 			"-d", baseOut,
 		}
 		args = append(args, ktSources...)
-		cmd := exec.Command(javaBin, args...)
+		cmd := exec.Command(javaBin, append([]string{jvmXmxFlag()}, args...)...)
 		if out, err := cmd.CombinedOutput(); err != nil {
 			fmt.Printf("库模块 %s kotlinc 失败: %s\n", mod.Name, strings.TrimSpace(string(out)))
 			return ""

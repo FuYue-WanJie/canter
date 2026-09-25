@@ -155,101 +155,11 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 			return false
 		}
 
-		merged := filepath.Join(ctx.BuildDir, "merged_classes")
-		kotlinClasses := filepath.Join(ctx.BuildDir, "kotlin_classes")
-		javaClasses := filepath.Join(ctx.BuildDir, "classes")
-		depsDir := filepath.Join(ctx.BuildDir, "deps")
-
-		// 每次都完整重建 merged_classes，避免陈旧/重复类残留
-		tmp := merged + ".tmp"
-		os.RemoveAll(tmp)
-		if err := copyTree(javaClasses, tmp); err != nil {
-			fmt.Printf("复制 Java 类失败: %v\n", err)
-			return false
-		}
-		if err := copyTree(kotlinClasses, tmp); err != nil {
-			fmt.Printf("复制 Kotlin 类失败: %v\n", err)
-			return false
-		}
-		// 项目 library 模块的编译产物（build/libs/*/classes）
-		for _, libDir := range projectLibClassDirs(ctx) {
-			if err := copyTree(libDir, tmp); err != nil {
-				fmt.Printf("复制库模块类失败: %v\n", err)
-			}
-		}
-		// 依赖类：同名类先到先得（避免 KMP 变体重复）
-		extractJarClasses := func(jarPath string) {
-			zr, err := zip.OpenReader(jarPath)
-			if err != nil {
-				return
-			}
-			defer zr.Close()
-			for _, f := range zr.File {
-				if !strings.HasSuffix(f.Name, ".class") {
-					continue
-				}
-				dest := filepath.Join(tmp, f.Name)
-				if _, err := os.Stat(dest); err == nil {
-					continue // 已存在则跳过，避免重复类
-				}
-				os.MkdirAll(filepath.Dir(dest), 0755)
-				rc, err := f.Open()
-				if err != nil {
-					continue
-				}
-				out, err := os.Create(dest)
-				if err == nil {
-					io.Copy(out, rc)
-					out.Close()
-				}
-				rc.Close()
-			}
-		}
-		if entries, err := os.ReadDir(depsDir); err == nil {
-			for _, e := range entries {
-				if !e.IsDir() {
-					continue
-				}
-				depDir := filepath.Join(depsDir, e.Name())
-				extractJarClasses(filepath.Join(depDir, "classes.jar"))
-				// AAR 内嵌 jar（如 emoji2 的 libs/repackaged.jar）
-				for _, aux := range depAuxJars(depDir) {
-					extractJarClasses(aux)
-				}
-			}
-		}
-		os.RemoveAll(merged)
-		if err := os.Rename(tmp, merged); err != nil {
-			fmt.Printf("合并类目录失败: %v\n", err)
-			return false
-		}
-
-		// 打包 merged_classes.jar
 		jarFile := filepath.Join(ctx.BuildDir, "merged_classes.jar")
-		out, err := os.Create(jarFile)
-		if err != nil {
-			fmt.Printf("创建 jar 失败: %v\n", err)
+		if err := mergeClassesJar(ctx, jarFile); err != nil {
+			fmt.Printf("合并类失败: %v\n", err)
 			return false
 		}
-		zw := zip.NewWriter(out)
-		filepath.Walk(merged, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
-			}
-			rel, _ := filepath.Rel(merged, path)
-			fh, err := zw.Create(filepath.ToSlash(rel))
-			if err != nil {
-				return nil
-			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			fh.Write(data)
-			return nil
-		})
-		zw.Close()
-		out.Close()
 
 		dexDir := filepath.Join(ctx.BuildDir, "dex")
 		os.RemoveAll(dexDir)
@@ -267,6 +177,89 @@ func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	}
 	return t
 }
+
+// mergeClassesJar 单遍流式合并工程类与依赖类到 jar，同名类先到先得（避免 KMP 变体重复）。
+// 相比“解压到目录再打包”，避免产生上万个中间小文件，减少磁盘 I/O。
+func mergeClassesJar(ctx *engine.BuildContext, jarFile string) error {
+	out, err := os.Create(jarFile)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	zw := zip.NewWriter(out)
+	seen := map[string]bool{}
+	addEntry := func(name string, r io.Reader) {
+		name = filepath.ToSlash(name)
+		if seen[name] {
+			return
+		}
+		seen[name] = true
+		fh, err := zw.Create(name)
+		if err != nil {
+			return
+		}
+		io.Copy(fh, r)
+	}
+	addDir := func(root string) {
+		filepath.Walk(root, func(path string, info os.FileInfo, err error) error {
+			if err != nil || info.IsDir() || !strings.HasSuffix(path, ".class") {
+				return nil
+			}
+			rel, rerr := filepath.Rel(root, path)
+			if rerr != nil {
+				return nil
+			}
+			f, oerr := os.Open(path)
+			if oerr != nil {
+				return nil
+			}
+			addEntry(rel, f)
+			f.Close()
+			return nil
+		})
+	}
+	addJar := func(jarPath string) {
+		zr, err := zip.OpenReader(jarPath)
+		if err != nil {
+			return
+		}
+		defer zr.Close()
+		for _, f := range zr.File {
+			if !strings.HasSuffix(f.Name, ".class") {
+				continue
+			}
+			rc, err := f.Open()
+			if err != nil {
+				continue
+			}
+			addEntry(f.Name, rc)
+			rc.Close()
+		}
+	}
+
+	// 工程类优先，随后依赖类
+	addDir(filepath.Join(ctx.BuildDir, "classes"))
+	addDir(filepath.Join(ctx.BuildDir, "kotlin_classes"))
+	for _, libDir := range projectLibClassDirs(ctx) {
+		addDir(libDir)
+	}
+	depsDir := filepath.Join(ctx.BuildDir, "deps")
+	if entries, err := os.ReadDir(depsDir); err == nil {
+		for _, e := range entries {
+			if !e.IsDir() {
+				continue
+			}
+			depDir := filepath.Join(depsDir, e.Name())
+			addJar(filepath.Join(depDir, "classes.jar"))
+			// AAR 内嵌 jar（如 emoji2 的 libs/repackaged.jar）
+			for _, aux := range depAuxJars(depDir) {
+				addJar(aux)
+			}
+		}
+	}
+	return zw.Close()
+}
+
 // PackageApkTask 打包 APK
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")
