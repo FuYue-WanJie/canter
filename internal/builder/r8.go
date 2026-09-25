@@ -36,10 +36,15 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "mapping.txt"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("R8 混淆 + dex...")
+		// 新版 build-tools 不再单独提供 r8.jar，R8 与 D8 同打包在 lib/d8.jar
 		r8Jar := filepath.Join(ctx.BuildTools, "lib", "r8.jar")
 		if _, err := os.Stat(r8Jar); err != nil {
-			fmt.Printf("r8.jar 未找到: %s\n", r8Jar)
-			return false
+			alt := filepath.Join(ctx.BuildTools, "lib", "d8.jar")
+			if _, err := os.Stat(alt); err != nil {
+				fmt.Printf("r8/d8 jar 未找到: %s 或 %s\n", r8Jar, alt)
+				return false
+			}
+			r8Jar = alt
 		}
 		dexDir := filepath.Join(ctx.BuildDir, "dex")
 		os.MkdirAll(dexDir, 0755)

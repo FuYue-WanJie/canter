@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	"canter/internal/builder"
 	"canter/internal/checker"
@@ -53,6 +54,21 @@ func main() {
 	}
 }
 
+// normalizeArgs 把选项（"-xxx"）移到位置参数之前。
+// Go 的 flag 包遇到首个非选项参数即停止解析，而本工具的用法是
+// `canter assemble <project> --release`，故需先重排。
+func normalizeArgs(args []string) []string {
+	var flags, positional []string
+	for _, a := range args {
+		if strings.HasPrefix(a, "-") {
+			flags = append(flags, a)
+		} else {
+			positional = append(positional, a)
+		}
+	}
+	return append(flags, positional...)
+}
+
 func resolveProject(args []string, fs *flag.FlagSet) string {
 	project := "."
 	le := fs.NArg()
@@ -71,7 +87,7 @@ func cmdAssemble(args []string) {
 	verbose := fs.Bool("v", false, "verbose output")
 	checkFirst := fs.Bool("check-first", false, "check toolchain first")
 	release := fs.Bool("release", false, "build release variant (R8 when minifyEnabled)")
-	fs.Parse(args)
+	fs.Parse(normalizeArgs(args))
 	_ = verbose
 
 	projectDir := resolveProject(args, fs)
@@ -89,7 +105,7 @@ func cmdAssemble(args []string) {
 
 func cmdClean(args []string) {
 	fs := flag.NewFlagSet("clean", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(normalizeArgs(args))
 	projectDir := resolveProject(args, fs)
 	config := parser.GradleConfigParser{}.Parse(projectDir)
 	b := builder.NewBuilder(projectDir, config)
@@ -98,7 +114,7 @@ func cmdClean(args []string) {
 
 func cmdCheck(args []string) {
 	fs := flag.NewFlagSet("check", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(normalizeArgs(args))
 	projectDir := resolveProject(args, fs)
 	config := parser.GradleConfigParser{}.Parse(projectDir)
 	runCheck(projectDir, config)
@@ -118,7 +134,7 @@ func runCheck(projectDir string, config *parser.ProjectConfig) {
 
 func cmdParse(args []string) {
 	fs := flag.NewFlagSet("parse", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(normalizeArgs(args))
 	projectDir := resolveProject(args, fs)
 	config := parser.GradleConfigParser{}.Parse(projectDir)
 
@@ -143,6 +159,11 @@ func cmdParse(args []string) {
 				fmt.Printf("    versionCode: %d\n", *a.VersionCode)
 			}
 			fmt.Printf("    applicationId: %s\n", a.ApplicationID)
+			fmt.Printf("    minifyEnabled: %v, shrinkResources: %v, signingConfig: %q\n",
+				a.MinifyEnabled, a.ShrinkResources, a.SigningConfig)
+			if len(a.ProguardFiles) > 0 {
+				fmt.Printf("    proguardFiles: %v\n", a.ProguardFiles)
+			}
 		}
 		if len(mod.Dependencies) > 0 {
 			fmt.Printf("    依赖 (%d):\n", len(mod.Dependencies))
@@ -163,7 +184,7 @@ func cmdParse(args []string) {
 
 func cmdDeps(args []string) {
 	fs := flag.NewFlagSet("deps", flag.ExitOnError)
-	fs.Parse(args)
+	fs.Parse(normalizeArgs(args))
 	projectDir := resolveProject(args, fs)
 	config := parser.GradleConfigParser{}.Parse(projectDir)
 

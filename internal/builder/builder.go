@@ -205,6 +205,21 @@ func formatCompileSDK(sdk float64) string {
 	return s
 }
 
+// variantKey 返回当前构建变体标识（debug/release + 选中 flavor），用于隔离任务缓存
+func (b *Builder) variantKey() string {
+	if ac, ok := b.Context.Config.(*AppConfig); ok {
+		kind := "debug"
+		if ac.Release {
+			kind = "release"
+		}
+		if ac.SelectedFlavor != "" {
+			kind += "-" + ac.SelectedFlavor
+		}
+		return kind
+	}
+	return "debug"
+}
+
 // Assemble 执行完整构建（release 决定是否启用 R8 混淆路径）
 func (b *Builder) Assemble(release bool) error {
 	if cfg, ok := b.Context.Config.(*AppConfig); ok {
@@ -248,7 +263,7 @@ func (b *Builder) Assemble(release bool) error {
 	// 依赖图（对齐 AGP 有向无环结构）
 	tasks[1].AddDependency("mergeResources")
 	tasks[2].AddDependency("aapt2Compile")
-	tasks[4].AddDependency("aapt2Link")   // compileJava 需要 R.java
+	tasks[4].AddDependency("aapt2Link") // compileJava 需要 R.java
 	tasks[4].AddDependency("generateBuildConfig")
 	tasks[5].AddDependency("compileJava") // Kotlin 依赖 Java 类
 	dexIdx := 6
@@ -268,7 +283,10 @@ func (b *Builder) Assemble(release bool) error {
 		}
 	}
 
-	result := graph.Execute(b.Context, b.CacheDir, 4)
+	// 任务缓存按变体隔离：debug/release（及 flavor）的输出语义不同，
+	// 复用彼此的任务缓存会导致切换变体时被误判为“已是最新”。
+	variantCache := filepath.Join(b.CacheDir, b.variantKey())
+	result := graph.Execute(b.Context, variantCache, 4)
 	if !result.Success() {
 		fmt.Println("BUILD FAILED")
 		fmt.Printf("失败任务: %v\n", result.Failed)
@@ -382,12 +400,12 @@ func (b *Builder) resolveDependencies() error {
 
 	// 全图 BFS：先只下载 POM 解析传递依赖，收集所有 (group, artifact, version) 候选
 	// 版本冲突消解：对每个 group:artifact 记录所有出现过的版本，最终选最高
-	reported := map[string]bool{}            // key g:a:v 已解析过 POM
+	reported := map[string]bool{} // key g:a:v 已解析过 POM
 	type gaVers struct {
 		group, artifact string
 		versions        []string
 	}
-	gaMap := map[string]*gaVers{}            // key g:a -> 版本候选集
+	gaMap := map[string]*gaVers{} // key g:a -> 版本候选集
 	getGA := func(g, a string) *gaVers {
 		key := g + ":" + a
 		if v, ok := gaMap[key]; ok {
@@ -544,10 +562,10 @@ type pomDepEntry struct {
 }
 
 type pomDepsModel struct {
-	XMLName      xml.Name        `xml:"project"`
-	Packaging    string          `xml:"packaging"`
-	Dependencies []pomDepEntry   `xml:"dependencies>dependency"`
-	DepMgmt      []pomDepEntry   `xml:"dependencyManagement>dependencies>dependency"`
+	XMLName      xml.Name      `xml:"project"`
+	Packaging    string        `xml:"packaging"`
+	Dependencies []pomDepEntry `xml:"dependencies>dependency"`
+	DepMgmt      []pomDepEntry `xml:"dependencyManagement>dependencies>dependency"`
 }
 
 // pomBOMImports 解析 POM 的 dependencyManagement 中被 import 的 BOM（type=pom, scope=import）
