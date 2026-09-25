@@ -173,7 +173,7 @@ func Aapt2LinkTask(ctx *engine.BuildContext) *engine.Task {
 			libManifests = append(libManifests, scanAARManifests(depsDir)...)
 		}
 		home, _ := os.UserHomeDir()
-		globalDeps := filepath.Join(home, ".minibuild", "cache", "deps")
+		globalDeps := filepath.Join(home, ".canter", "cache", "deps")
 		if _, err := os.Stat(globalDeps); err == nil {
 			libManifests = append(libManifests, scanAARManifests(globalDeps)...)
 		}

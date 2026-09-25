@@ -391,7 +391,7 @@ func (c *ToolchainChecker) CheckKotlinCompiler(config *parser.ProjectConfig) Che
 func (c *ToolchainChecker) CheckDependencies(config *parser.ProjectConfig) []MissingDependency {
 	home, _ := os.UserHomeDir()
 	gradleCache := filepath.Join(home, ".gradle", "caches", "modules-2", "files-2.1")
-	mbCache := filepath.Join(home, ".minibuild", "cache", "deps")
+	mbCache := filepath.Join(home, ".canter", "cache", "deps")
 
 	var missing []MissingDependency
 	for _, mod := range config.Modules {

@@ -170,7 +170,7 @@ func cmdDeps(args []string) {
 	home, _ := os.UserHomeDir()
 	mgr := mirror.NewManager("")
 	repos := mgr.GetRepositories()
-	downloader := builder.NewDownloader(repos, filepath.Join(home, ".minibuild", "cache", "deps"))
+	downloader := builder.NewDownloader(repos, filepath.Join(home, ".canter", "cache", "deps"))
 
 	var allDeps []parser.Dependency
 	for _, mod := range config.Modules {

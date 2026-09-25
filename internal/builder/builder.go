@@ -28,8 +28,8 @@ type Builder struct {
 // NewBuilder 创建构建引擎
 func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 	home, _ := os.UserHomeDir()
-	buildDir := filepath.Join(projectDir, "build", "minibuild")
-	cacheDir := filepath.Join(home, ".minibuild", "cache", filepath.Base(projectDir))
+	buildDir := filepath.Join(projectDir, "build", "canter")
+	cacheDir := filepath.Join(home, ".canter", "cache", filepath.Base(projectDir))
 	sdk := os.Getenv("ANDROID_SDK_ROOT")
 	if sdk == "" {
 		sdk = filepath.Join(home, ".android-sdk")
@@ -300,7 +300,7 @@ func (b *Builder) resolveDependencies() error {
 	depsDir := filepath.Join(b.BuildDir, "deps")
 	os.MkdirAll(depsDir, 0755)
 	repos := b.MirrorMgr.GetRepositories()
-	downloader := NewDownloader(repos, filepath.Join(b.Home, ".minibuild", "cache", "deps"))
+	downloader := NewDownloader(repos, filepath.Join(b.Home, ".canter", "cache", "deps"))
 
 	type coord struct {
 		group, artifact, version string

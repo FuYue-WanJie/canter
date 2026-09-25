@@ -120,7 +120,7 @@ func (d *Downloader) IsValidArtifact(artPath string) bool {
 	return false
 }
 
-// FetchPOM 仅获取 POM（minibuild 缓存 → Gradle 缓存 → 短超时网络），用于依赖图遍历
+// FetchPOM 仅获取 POM（Canter 缓存 → Gradle 缓存 → 短超时网络），用于依赖图遍历
 func (d *Downloader) FetchPOM(group, artifact, version string) (string, error) {
 	groupPath := strings.ReplaceAll(group, ".", "/")
 	pomPath := filepath.Join(d.CacheDir, filepath.FromSlash(groupPath), artifact, version, artifact+"-"+version+".pom")
@@ -227,7 +227,7 @@ func (d *Downloader) Download(group, artifact, version string) (string, error) {
 
 	groupPath := strings.ReplaceAll(group, ".", "/")
 
-	// 缓存检查（minibuild 缓存 → Gradle 缓存）
+	// 缓存检查（Canter 缓存 → Gradle 缓存）
 	for _, artName := range []string{artifact, artifact + "-android", artifact + "-release", artifact + "-jvm"} {
 		for _, ext := range []string{"aar", "jar"} {
 			path := filepath.Join(d.CacheDir, filepath.FromSlash(groupPath), artName, version, artName+"-"+version+"."+ext)

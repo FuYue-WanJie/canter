@@ -111,7 +111,7 @@ type pomModel struct {
 }
 
 // fetchBomVersions 下载 BOM POM 并解析 dependencyManagement 中的版本映射。
-// 优先读本地依赖缓存（~/.minibuild/cache/deps），回退远程镜像。
+// 优先读本地依赖缓存（~/.canter/cache/deps），回退远程镜像。
 func (c *VersionCatalog) fetchBomVersions(bomGroup, bomVersion string) map[[2]string]string {
 	cacheKey := bomGroup + ":" + bomVersion
 	if m, ok := c.bomCache[cacheKey]; ok {
@@ -170,7 +170,7 @@ func readCachedBomPOM(bomGroup, bomVersion string) []byte {
 		return nil
 	}
 	groupPath := strings.ReplaceAll(bomGroup, ".", "/")
-	base := filepath.Join(home, ".minibuild", "cache", "deps", filepath.FromSlash(groupPath))
+	base := filepath.Join(home, ".canter", "cache", "deps", filepath.FromSlash(groupPath))
 	for _, art := range []string{"compose-bom", bomGroup[strings.LastIndex(bomGroup, ".")+1:]} {
 		p := filepath.Join(base, art, bomVersion, art+"-"+bomVersion+".pom")
 		if data, err := os.ReadFile(p); err == nil {

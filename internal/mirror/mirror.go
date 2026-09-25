@@ -124,7 +124,7 @@ type Manager struct {
 func NewManager(configDir string) *Manager {
 	if configDir == "" {
 		home, _ := os.UserHomeDir()
-		configDir = filepath.Join(home, ".minibuild")
+		configDir = filepath.Join(home, ".canter")
 	}
 	m := &Manager{
 		ConfigDir:  configDir,
@@ -329,7 +329,7 @@ func ping(url string, timeout float64) (float64, bool) {
 	if err != nil {
 		return -1, false
 	}
-	req.Header.Set("User-Agent", "MiniBuild/0.1")
+	req.Header.Set("User-Agent", "Canter/0.1")
 	req.Header.Set("Range", "bytes=0-1048575")
 	client := &http.Client{Timeout: time.Duration(timeout * float64(time.Second))}
 	resp, err := client.Do(req)
