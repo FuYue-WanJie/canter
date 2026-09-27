@@ -5,19 +5,24 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
-	"strings"
 
 	"canter/internal/engine"
 )
 
-// R8PassThrough 无声明的兜底 keep-all 规则（对齐 R8Subprocess）
-var r8PassThrough = []string{
-	"-keepattributes *Annotation*",
-	"-keep class ** { *; }",
-}
-
 // R8IgnoreWarnings 忽略缺少类引用的 warning（后者影响 dex 输出）
 const r8IgnoreWarnings = "-dontwarn **"
+
+// writeInlineRuleFile 写入一段内联规则并返回路径（写失败返回空）
+func writeInlineRuleFile(buildDir, name, content string) string {
+	out := filepath.Join(buildDir, "pgconf", name)
+	if err := os.MkdirAll(filepath.Dir(out), 0755); err != nil {
+		return ""
+	}
+	if err := os.WriteFile(out, []byte(content), 0644); err != nil {
+		return ""
+	}
+	return out
+}
 
 // R8MinifyTask release 构建的 R8 混淆 + dex（替代 DexBuildTask 的高层步骤）
 func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
@@ -25,12 +30,20 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	mergedJar := filepath.Join(ctx.BuildDir, "merged_classes.jar")
 	t.AddFileInputs(mergedJar)
-	var keepFiles []string
+	// manifest 与依赖集合参与签名：组件 keep 规则与 consumer 规则由二者派生
+	t.AddFileInputs(filepath.Join(ctx.BuildDir, "AndroidManifest_fixed.xml"))
+	t.AddFileInputs(depsSignatureFile(ctx))
 	if cfg, ok := ctx.Config.(*AppConfig); ok {
-		keepFiles = cfg.ProguardFiles
-	}
-	for _, f := range keepFiles {
-		t.AddFileInputs(f)
+		for _, f := range cfg.ProguardFiles {
+			// 默认规则文件生成到构建目录，以其内容参与签名
+			if isDefaultProguardFile(f) {
+				if def, err := writeDefaultProguardFile(ctx.BuildDir, f); err == nil {
+					t.AddFileInputs(def)
+				}
+				continue
+			}
+			t.AddFileInputs(f)
+		}
 	}
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "mapping.txt"))
@@ -50,19 +63,34 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 		os.MkdirAll(dexDir, 0755)
 
 		keep := expandKeepFiles(ctx)
-		inline := strings.Join(r8PassThrough, "\n") + "\n" + r8IgnoreWarnings + "\n"
-		// 汇总 keep 规则文件
+		// 汇总 keep 规则文件：项目规则 + AGP 默认规则 + AAR consumer 规则 + manifest 组件 keep。
+		// 默认规则文件（如 proguard-android-optimize.txt）是 vendor 进仓库的内容，
+		// 写到 pgconf 后同时作为任务输入参与签名。
 		var pgConfs []string
 		for _, f := range keep {
+			if isDefaultProguardFile(f) {
+				def, err := writeDefaultProguardFile(ctx.BuildDir, f)
+				if err != nil {
+					fmt.Printf("警告: 默认 proguard 规则生成失败: %v\n", err)
+					continue
+				}
+				pgConfs = append(pgConfs, def)
+				continue
+			}
 			if _, err := os.Stat(f); err == nil {
 				pgConfs = append(pgConfs, f)
+			} else {
+				fmt.Printf("警告: proguard 文件未找到: %s\n", f)
 			}
 		}
-		if len(pgConfs) == 0 {
-			f := filepath.Join(ctx.BuildDir, "r8-inline.pro")
-			if err := os.WriteFile(f, []byte(inline), 0644); err == nil {
-				pgConfs = append(pgConfs, f)
-			}
+		pgConfs = append(pgConfs, depConsumerRules(filepath.Join(ctx.BuildDir, "deps"))...)
+		if manifestKeep, err := writeComponentKeepRules(
+			ctx.BuildDir, filepath.Join(ctx.BuildDir, "AndroidManifest_fixed.xml")); err == nil && manifestKeep != "" {
+			pgConfs = append(pgConfs, manifestKeep)
+		}
+		// 缺失引用告警按 AGP 惯例放行（依赖存在少量无伤大雅的缺失引用）
+		if f := writeInlineRuleFile(ctx.BuildDir, "r8-dontwarn.pro", r8IgnoreWarnings+"\n"); f != "" {
+			pgConfs = append(pgConfs, f)
 		}
 
 		minApi := "23"
@@ -110,18 +138,23 @@ func expandKeepFiles(ctx *engine.BuildContext) []string {
 	var result []string
 	if cfg, ok := ctx.Config.(*AppConfig); ok {
 		for _, f := range cfg.ProguardFiles {
+			// getDefaultProguardFile 抓到的裸文件名原样透传，由调用方展开为内置规则
+			if isDefaultProguardFile(f) {
+				result = append(result, f)
+				continue
+			}
 			if filepath.IsAbs(f) {
 				result = append(result, f)
-			} else {
-				candidates := []string{
-					filepath.Join(ctx.ProjectDir, f),
-					filepath.Join(ctx.ModuleDirOrProject(), f),
-				}
-				for _, c := range candidates {
-					if _, err := os.Stat(c); err == nil {
-						result = append(result, c)
-						break
-					}
+				continue
+			}
+			candidates := []string{
+				filepath.Join(ctx.ProjectDir, f),
+				filepath.Join(ctx.ModuleDirOrProject(), f),
+			}
+			for _, c := range candidates {
+				if _, err := os.Stat(c); err == nil {
+					result = append(result, c)
+					break
 				}
 			}
 		}

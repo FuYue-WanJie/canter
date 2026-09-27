@@ -6,6 +6,7 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 )
 
@@ -27,6 +28,9 @@ func unzipDepTo(group, artifact, path, depsDir string) {
 				} else if strings.HasPrefix(f.Name, "libs/") && strings.HasSuffix(f.Name, ".jar") {
 					// AAR 内嵌 jar（如 emoji2 的 libs/repackaged.jar）需并入 classpath 与 dex
 					extractZipEntry(f, filepath.Join(depDir, f.Name))
+				} else if f.Name == "proguard.txt" {
+					// AAR consumer proguard 规则，release 构建时并入 R8
+					extractZipEntry(f, filepath.Join(depDir, "proguard.txt"))
 				}
 			}
 			zr.Close()
@@ -76,6 +80,26 @@ func depAuxJars(depDir string) []string {
 		}
 	}
 	return jars
+}
+
+// depConsumerRules 返回依赖目录下 AAR consumer proguard 规则（proguard.txt）的路径列表
+func depConsumerRules(depsDir string) []string {
+	entries, err := os.ReadDir(depsDir)
+	if err != nil {
+		return nil
+	}
+	var rules []string
+	for _, e := range entries {
+		if !e.IsDir() {
+			continue
+		}
+		p := filepath.Join(depsDir, e.Name(), "proguard.txt")
+		if fi, err := os.Stat(p); err == nil && !fi.IsDir() {
+			rules = append(rules, p)
+		}
+	}
+	sort.Strings(rules)
+	return rules
 }
 
 // materializeDeps 从缓存坐标下载并解压依赖（下载命中全局缓存时很快）
