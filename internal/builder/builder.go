@@ -128,6 +128,22 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		appConfig.BuildConfigs = mod.Android.BuildConfigFields
 		appConfig.SelectedFlavor = mod.Android.SelectedFlavor
 		appConfig.VersionNameSuffix = mod.Android.FlavorVersionNameSuffix
+		appConfig.SplitABIEnable = mod.Android.SplitABIEnable
+		appConfig.SigningConfigs = map[string]parser.SigningConfigEntry{}
+		for name, sc := range mod.Android.SigningConfigs {
+			appConfig.SigningConfigs[name] = sc
+		}
+		appConfig.SigningConfig = mod.Android.SigningConfig
+		// splits.abi：universal APK 默认开启（Gradle 默认值），显式 false 关闭；
+		// include(...) 的 ABI 列表缺省回退 ndk.abiFilters
+		if mod.Android.SplitABIEnable {
+			appConfig.SplitABIUniversal = mod.Android.SplitABIUniversalDecl == nil || *mod.Android.SplitABIUniversalDecl
+			if len(mod.Android.SplitABIInclude) > 0 {
+				appConfig.SplitABIInclude = mod.Android.SplitABIInclude
+			} else if len(appConfig.ABIFilters) > 0 {
+				appConfig.SplitABIInclude = appConfig.ABIFilters
+			}
+		}
 		for _, pl := range mod.Plugins {
 			if pl == "kotlin-parcelize" || pl == "org.jetbrains.kotlin.plugin.parcelize" {
 				appConfig.Parcelize = true
@@ -294,9 +310,12 @@ func (b *Builder) Assemble(release bool) error {
 	}
 	fmt.Printf("BUILD SUCCESSFUL in %.1fs\n", b.Context.Elapsed().Seconds())
 	fmt.Printf("执行: %d, 跳过: %d\n", len(result.Executed), len(result.Skipped))
-	signed := filepath.Join(b.BuildDir, "app-signed.apk")
-	if info, err := os.Stat(signed); err == nil {
-		fmt.Printf("APK: %s (%dKB)\n", signed, info.Size()/1024)
+	// 列出全部签名产物（universal + per-ABI）
+	for _, v := range apkVariants(b.Context.Config.(*AppConfig)) {
+		signed := filepath.Join(b.BuildDir, v.Name+"-signed.apk")
+		if info, err := os.Stat(signed); err == nil {
+			fmt.Printf("APK: %s (%dKB)\n", signed, info.Size()/1024)
+		}
 	}
 	return nil
 }

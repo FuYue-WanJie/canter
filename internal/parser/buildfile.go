@@ -9,24 +9,32 @@ import (
 )
 
 var (
-	pluginAliasRe   = regexp.MustCompile(`alias\s*\(\s*libs\.plugins\.([\w.]+)\s*\)`)
-	pluginIDRe      = regexp.MustCompile(`id\s*\(\s*"([^"]*)"\s*(?:,\s*"([^"]*)")?\s*\)`)
-	pluginApplyRe   = regexp.MustCompile(`apply\s*\(\s*plugin\s*=\s*"([^"]*)"\s*\)`)
-	compileSdkNewRe = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)\s*\{?[^}]*minorApiLevel\s*=\s*(\d+)`)
-	compileSdkRe    = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)`)
-	abiFilterRe     = regexp.MustCompile(`abiFilters\s*\+=\s*listOf\s*\(([^)]*)\)`)
-	proguardFilesRe = regexp.MustCompile(`proguardFiles\s*\(([^)]*)\)`)
-	signingCfgRe    = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.getByName\s*\(\s*"([^"]*)"\s*\)`)
-	javaVersionRe   = regexp.MustCompile(`JavaVersion\.VERSION_(\w+)`)
-	bomDetectRe     = regexp.MustCompile(`platform\s*\(\s*libs\.([\w.]+)\s*\)`)
-	scopeStmtRe     = regexp.MustCompile(`(?s)(\w+)\s*\(\s*(.+?)\s*\)\s*$`)
-	platformShellRe = regexp.MustCompile(`(?s)platform\s*\(\s*(.+?)\s*\)\s*$`)
-	libsAccessorRe  = regexp.MustCompile(`libs\.([\w.]+)\s*$`)
-	coordStrRe      = regexp.MustCompile(`"([^:]+):([^:]+):([^"]+)"`)
-	projectDepRe    = regexp.MustCompile(`project\s*\(\s*"([^"]*)"\s*\)`)
-	excludeSingleRe = regexp.MustCompile(`excludes\s*\+=\s*"([^"]*)"`)
-	excludeListRe   = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
-	buildConfigFieldRe = regexp.MustCompile(`buildConfigField\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)`)
+	pluginAliasRe       = regexp.MustCompile(`alias\s*\(\s*libs\.plugins\.([\w.]+)\s*\)`)
+	pluginIDRe          = regexp.MustCompile(`id\s*\(\s*"([^"]*)"\s*(?:,\s*"([^"]*)")?\s*\)`)
+	pluginApplyRe       = regexp.MustCompile(`apply\s*\(\s*plugin\s*=\s*"([^"]*)"\s*\)`)
+	compileSdkNewRe     = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)\s*\{?[^}]*minorApiLevel\s*=\s*(\d+)`)
+	compileSdkRe        = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)`)
+	abiFilterRe         = regexp.MustCompile(`abiFilters\s*\+=\s*listOf\s*\(([^)]*)\)`)
+	proguardFilesRe     = regexp.MustCompile(`proguardFiles\s*\(([^)]*)\)`)
+	signingCfgRe        = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.getByName\s*\(\s*"([^"]*)"\s*\)`)
+	signingCfgFindRe    = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.findByName\s*\(\s*"([^"]*)"\s*\)`)
+	signingCreateRe     = regexp.MustCompile(`create\s*\(\s*"([^"]+)"\s*\)\s*\{`)
+	fileExprRe          = regexp.MustCompile(`(?:rootProject\.)?file\s*\(\s*"([^"]+)"\s*\)`)
+	getenvExprRe        = regexp.MustCompile(`System\.getenv\s*\(\s*"([^"]+)"\s*\)`)
+	quotedStrRe         = regexp.MustCompile(`"([^"]*)"`)
+	abiIncludeRe        = regexp.MustCompile(`include\s*\(([^)]*)\)`)
+	universalApkRe      = regexp.MustCompile(`isUniversalApk\s*=\s*(true|false)`)
+	abiEnableRe         = regexp.MustCompile(`isEnable\s*=\s*(true|false)`)
+	javaVersionRe       = regexp.MustCompile(`JavaVersion\.VERSION_(\w+)`)
+	bomDetectRe         = regexp.MustCompile(`platform\s*\(\s*libs\.([\w.]+)\s*\)`)
+	scopeStmtRe         = regexp.MustCompile(`(?s)(\w+)\s*\(\s*(.+?)\s*\)\s*$`)
+	platformShellRe     = regexp.MustCompile(`(?s)platform\s*\(\s*(.+?)\s*\)\s*$`)
+	libsAccessorRe      = regexp.MustCompile(`libs\.([\w.]+)\s*$`)
+	coordStrRe          = regexp.MustCompile(`"([^:]+):([^:]+):([^"]+)"`)
+	projectDepRe        = regexp.MustCompile(`project\s*\(\s*"([^"]*)"\s*\)`)
+	excludeSingleRe     = regexp.MustCompile(`excludes\s*\+=\s*"([^"]*)"`)
+	excludeListRe       = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
+	buildConfigFieldRe  = regexp.MustCompile(`buildConfigField\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)`)
 	createNameRe        = regexp.MustCompile(`create\s*\(\s*"([^"]*)"\s*\)`)
 	versionNameSuffixRe = regexp.MustCompile(`versionNameSuffix\s*=\s*"([^"]*)"`)
 )
@@ -226,7 +234,45 @@ func (p BuildFileParser) parseAndroidBlock(content string, module *ModuleConfig)
 			}
 			if m := signingCfgRe.FindStringSubmatch(rel); m != nil {
 				android.SigningConfig = m[1]
+			} else if m := signingCfgFindRe.FindStringSubmatch(rel); m != nil {
+				android.SigningConfig = m[1]
 			}
+		}
+	}
+
+	// splits.abi：per-ABI APK 拆分
+	if sc, ok := p.Script.FindBlock(block, "splits"); ok {
+		if abi, ok2 := p.Script.FindBlock(sc, "abi"); ok2 {
+			if m := abiEnableRe.FindStringSubmatch(abi); m != nil {
+				android.SplitABIEnable = m[1] == "true"
+			}
+			if m := universalApkRe.FindStringSubmatch(abi); m != nil {
+				v := m[1] == "true"
+				android.SplitABIUniversalDecl = &v
+			}
+			if m := abiIncludeRe.FindStringSubmatch(abi); m != nil {
+				android.SplitABIInclude = p.Script.ExtractQuotedStrings(m[1])
+			}
+		}
+	}
+
+	// signingConfigs：create("name") 块（storeFile/storePassword/keyAlias/keyPassword）
+	if scBlock, ok := p.Script.FindBlock(block, "signingConfigs"); ok {
+		for _, m := range signingCreateRe.FindAllStringSubmatch(scBlock, -1) {
+			name := m[1]
+			body, ok := p.Script.FindBlock(scBlock, `create("`+name+`")`)
+			if !ok {
+				continue
+			}
+			entry := SigningConfigEntry{}
+			entry.StoreFile = firstStringExpr(body, "storeFile")
+			entry.StorePassword = firstStringExpr(body, "storePassword")
+			entry.KeyAlias = firstStringExpr(body, "keyAlias")
+			entry.KeyPassword = firstStringExpr(body, "keyPassword")
+			if android.SigningConfigs == nil {
+				android.SigningConfigs = map[string]SigningConfigEntry{}
+			}
+			android.SigningConfigs[name] = entry
 		}
 	}
 
@@ -347,4 +393,30 @@ func (p BuildFileParser) parsePackaging(content string, module *ModuleConfig) {
 	for _, m := range excludeListRe.FindAllStringSubmatch(res, -1) {
 		module.PackagingExcludes = p.Script.ExtractQuotedStrings(m[1])
 	}
+}
+
+// firstStringExpr 提取 `key = <expr>` 的原始表达式：
+// 支持 file("x") / rootProject.file("x") / System.getenv("X") / 字面量。
+// 返回形如 "file:x"、"env:X" 或裸字面量，由 builder 侧解析。
+func firstStringExpr(body, key string) string {
+	re := regexp.MustCompile(`\b` + regexp.QuoteMeta(key) + `\s*=\s*(.+)`)
+	m := re.FindStringSubmatch(body)
+	if m == nil {
+		return ""
+	}
+	expr := strings.TrimSpace(m[1])
+	if idx := strings.Index(expr, "\n"); idx >= 0 {
+		expr = strings.TrimSpace(expr[:idx])
+	}
+	expr = strings.TrimSuffix(strings.TrimSpace(expr), ",")
+	if fm := fileExprRe.FindStringSubmatch(expr); fm != nil {
+		return "file:" + fm[1]
+	}
+	if em := getenvExprRe.FindStringSubmatch(expr); em != nil {
+		return "env:" + em[1]
+	}
+	if sm := quotedStrRe.FindStringSubmatch(expr); sm != nil {
+		return sm[1]
+	}
+	return ""
 }

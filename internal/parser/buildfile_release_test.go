@@ -39,7 +39,10 @@ android {
     signingConfigs {
         if (hasReleaseSigning) {
             create("release") {
-                storeFile = rootProject.file("x")
+                storeFile = rootProject.file("keystore/release.jks")
+                storePassword = System.getenv("ANDROID_KEYSTORE_PASSWORD")
+                keyAlias = "release-key"
+                keyPassword = System.getenv("ANDROID_KEY_PASSWORD")
             }
         }
     }
@@ -89,5 +92,36 @@ func TestParseReleaseMinifyConfig(t *testing.T) {
 	}
 	if len(mod.Android.ProguardFiles) != 1 || mod.Android.ProguardFiles[0] != "proguard-android-optimize.txt" {
 		t.Errorf("proguardFiles 解析异常: %v", mod.Android.ProguardFiles)
+	}
+	// splits.abi
+	if !mod.Android.SplitABIEnable {
+		t.Errorf("splits.abi.isEnable 应为 true")
+	}
+	if mod.Android.SplitABIUniversalDecl == nil || !*mod.Android.SplitABIUniversalDecl {
+		t.Errorf("isUniversalApk 应为 true")
+	}
+	if len(mod.Android.SplitABIInclude) != 2 ||
+		mod.Android.SplitABIInclude[0] != "armeabi-v7a" || mod.Android.SplitABIInclude[1] != "arm64-v8a" {
+		t.Errorf("splits.abi.include 解析异常: %v", mod.Android.SplitABIInclude)
+	}
+	// signingConfigs
+	sc, ok := mod.Android.SigningConfigs["release"]
+	if !ok {
+		t.Fatalf("signingConfigs[release] 未解析")
+	}
+	if sc.StoreFile != "file:keystore/release.jks" {
+		t.Errorf("storeFile 解析异常: %q", sc.StoreFile)
+	}
+	if sc.StorePassword != "env:ANDROID_KEYSTORE_PASSWORD" {
+		t.Errorf("storePassword 解析异常: %q", sc.StorePassword)
+	}
+	if sc.KeyAlias != "release-key" {
+		t.Errorf("keyAlias 解析异常: %q", sc.KeyAlias)
+	}
+	if sc.KeyPassword != "env:ANDROID_KEY_PASSWORD" {
+		t.Errorf("keyPassword 解析异常: %q", sc.KeyPassword)
+	}
+	if mod.Android.SigningConfig != "release" {
+		t.Errorf("buildTypes.release.signingConfig 应为 release，实际 %q", mod.Android.SigningConfig)
 	}
 }

@@ -10,33 +10,39 @@ import (
 	"strings"
 
 	"canter/internal/engine"
+	"canter/internal/parser"
 )
 
 // AppConfig 应用配置（由 Builder 从 ProjectConfig 提取）
 type AppConfig struct {
-	Namespace      string
-	ApplicationID  string
-	VersionCode    string
-	VersionName    string
-	MinSDK         string
-	TargetSDK      string
-	CompileSDK     string
-	JvmTarget      string
-	ABIFilters     []string
-	ModuleName     string
-	ModuleDir      string
-	MinifyEnabled  bool
-	ProguardFiles  []string
-	Release        bool
-	BuildConfigs   []string // flavor buildConfigField 等额外字段（key=value）
-	SelectedFlavor string
-	Parcelize      bool     // 是否启用 kotlin-parcelize 插件
-	Compose        bool     // 是否启用 Compose 编译器插件
-	Serialization  bool     // 是否启用 kotlin-serialization 插件
+	Namespace         string
+	ApplicationID     string
+	VersionCode       string
+	VersionName       string
+	MinSDK            string
+	TargetSDK         string
+	CompileSDK        string
+	JvmTarget         string
+	ABIFilters        []string
+	ModuleName        string
+	ModuleDir         string
+	MinifyEnabled     bool
+	ProguardFiles     []string
+	Release           bool
+	BuildConfigs      []string // flavor buildConfigField 等额外字段（key=value）
+	SelectedFlavor    string
+	Parcelize         bool   // 是否启用 kotlin-parcelize 插件
+	Compose           bool   // 是否启用 Compose 编译器插件
+	Serialization     bool   // 是否启用 kotlin-serialization 插件
 	VersionNameSuffix string // flavor 的 versionNameSuffix
-	LibraryResDirs []string // 项目 library 模块的 res 目录
-	LibraryAssets  []string // 项目 library 模块的 assets 目录
-	LibraryJniLibs []string // 项目 library 模块的 jniLibs 目录
+	SplitABIEnable    bool   // splits.abi.isEnable
+	SplitABIUniversal bool   // universal APK（splits.abi.isUniversalApk，默认 true）
+	SplitABIInclude   []string
+	SigningConfigs    map[string]parser.SigningConfigEntry
+	SigningConfig     string   // release 使用的签名配置名
+	LibraryResDirs    []string // 项目 library 模块的 res 目录
+	LibraryAssets     []string // 项目 library 模块的 assets 目录
+	LibraryJniLibs    []string // 项目 library 模块的 jniLibs 目录
 }
 
 // MinifyCompatible 判断是否启用 R8 混淆
@@ -139,6 +145,7 @@ func copyTree(src, dst string) error {
 		return copyFile(path, target)
 	})
 }
+
 // DexBuildTask D8 打包（合并工程类与依赖类后一次 D8，支持 multidex）
 func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("dexBuild")
@@ -260,13 +267,41 @@ func mergeClassesJar(ctx *engine.BuildContext, jarFile string) error {
 	return zw.Close()
 }
 
+// apkVariant 一个 APK 产出计划（universal 或 per-ABI）
+type apkVariant struct {
+	Name string // 输出基础名（如 "app-debug"、"app-arm64-v8a-debug"）
+	ABI  string // 为空表示不过滤（universal）
+}
+
+// apkVariants 依据 splits.abi 配置返回本次构建的 APK 产出计划
+func apkVariants(cfg *AppConfig) []apkVariant {
+	variants := []apkVariant{{Name: "app-debug"}}
+	if cfg == nil || !cfg.SplitABIEnable || len(cfg.SplitABIInclude) == 0 {
+		return variants
+	}
+	if !cfg.SplitABIUniversal {
+		// 关闭 universal 时仅产 per-ABI（对齐 AGP）
+		variants = nil
+	}
+	for _, abi := range cfg.SplitABIInclude {
+		variants = append(variants, apkVariant{Name: "app-" + abi + "-debug", ABI: abi})
+	}
+	return variants
+}
+
 // PackageApkTask 打包 APK
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "resources.ap_"))
-	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "app-debug.apk"))
+	if cfg, ok := ctx.Config.(*AppConfig); ok {
+		for _, v := range apkVariants(cfg) {
+			t.AddFileOutputs(filepath.Join(ctx.BuildDir, v.Name+".apk"))
+		}
+	} else {
+		t.AddFileOutputs(filepath.Join(ctx.BuildDir, "app-debug.apk"))
+	}
 	if ac, ok := ctx.Config.(*AppConfig); ok {
 		for _, d := range ac.LibraryAssets {
 			t.AddDirInputs(d)
@@ -276,6 +311,7 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 		}
 	}
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
+		cfg, _ := ctx.Config.(*AppConfig)
 		tmpDir, err := os.MkdirTemp("", "canter-apk")
 		if err != nil {
 			fmt.Printf("创建临时目录失败: %v\n", err)
@@ -387,94 +423,226 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 			return nil
 		})
 
-		// 4. 打包 APK
-		apkPath := filepath.Join(ctx.BuildDir, "app-debug.apk")
-		out, err := os.Create(apkPath)
-		if err != nil {
-			fmt.Printf("创建 APK 失败: %v\n", err)
-			return false
-		}
-		zw := zip.NewWriter(out)
-		filepath.Walk(tmpDir, func(path string, info os.FileInfo, err error) error {
-			if err != nil || info.IsDir() {
-				return nil
+		// 4. 打包 APK（universal + per-ABI）
+		for _, v := range apkVariants(cfg) {
+			if err := writeApk(tmpDir, filepath.Join(ctx.BuildDir, v.Name+".apk"), v.ABI); err != nil {
+				fmt.Printf("打包 APK 失败: %v\n", err)
+				return false
 			}
-			relPath, rerr := filepath.Rel(tmpDir, path)
-			if rerr != nil {
-				return nil
-			}
-			rel := filepath.ToSlash(relPath)
-			// native 库不压缩（对齐 AGP：便于运行时 mmap，且与 Gradle 产物一致）
-			var fh io.Writer
-			if strings.HasPrefix(rel, "lib/") && strings.HasSuffix(rel, ".so") {
-				w, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zip.Store})
-				if err != nil {
-					return nil
+			if info, err := os.Stat(filepath.Join(ctx.BuildDir, v.Name+".apk")); err == nil {
+				label := v.Name
+				if v.ABI == "" {
+					label = "universal"
 				}
-				fh = w
-			} else {
-				w, err := zw.Create(rel)
-				if err != nil {
-					return nil
-				}
-				fh = w
+				fmt.Printf("APK [%s]: %s (%dKB)\n", label, v.Name+".apk", info.Size()/1024)
 			}
-			data, err := os.ReadFile(path)
-			if err != nil {
-				return nil
-			}
-			fh.Write(data)
-			return nil
-		})
-		zw.Close()
-		out.Close()
-
-		if info, err := os.Stat(apkPath); err == nil {
-			fmt.Printf("APK: %s (%dKB)\n", apkPath, info.Size()/1024)
 		}
 		return true
 	}
 	return t
 }
 
-// SignApkTask 签名 APK
+// writeApk 将 tmpDir 内容打包为 APK；abi 非空时仅打包该 ABI 的 native 库
+func writeApk(tmpDir, apkPath, abi string) error {
+	src := tmpDir
+	if abi != "" {
+		// per-ABI：在独立临时目录重排，仅保留该 ABI 的 lib/
+		filtered, err := os.MkdirTemp("", "canter-apk-abi")
+		if err != nil {
+			return err
+		}
+		defer os.RemoveAll(filtered)
+		if err := copyTree(src, filtered); err != nil {
+			return err
+		}
+		libDir := filepath.Join(filtered, "lib")
+		if entries, err := os.ReadDir(libDir); err == nil {
+			for _, e := range entries {
+				if e.IsDir() && e.Name() != abi {
+					os.RemoveAll(filepath.Join(libDir, e.Name()))
+				}
+			}
+		}
+		src = filtered
+	}
+
+	out, err := os.Create(apkPath)
+	if err != nil {
+		return err
+	}
+	defer out.Close()
+	zw := zip.NewWriter(out)
+	err = filepath.Walk(src, func(path string, info os.FileInfo, err error) error {
+		if err != nil || info.IsDir() {
+			return nil
+		}
+		relPath, rerr := filepath.Rel(src, path)
+		if rerr != nil {
+			return nil
+		}
+		rel := filepath.ToSlash(relPath)
+		// native 库不压缩（对齐 AGP：便于运行时 mmap，且与 Gradle 产物一致）
+		if strings.HasPrefix(rel, "lib/") && strings.HasSuffix(rel, ".so") {
+			w, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zip.Store})
+			if err != nil {
+				return nil
+			}
+			data, rerr := os.ReadFile(path)
+			if rerr != nil {
+				return nil
+			}
+			w.Write(data)
+			return nil
+		}
+		w, err := zw.Create(rel)
+		if err != nil {
+			return nil
+		}
+		data, rerr := os.ReadFile(path)
+		if rerr != nil {
+			return nil
+		}
+		w.Write(data)
+		return nil
+	})
+	if err != nil {
+		return err
+	}
+	return zw.Close()
+}
+
+// keystoreRef 一次签名所用的密钥信息
+type keystoreRef struct {
+	Path          string
+	StorePassword string
+	KeyAlias      string
+	KeyPassword   string
+	IsDebug       bool
+}
+
+// resolveKeystore 解析签名配置：release 时优先 signingConfigs（含 env: 引用
+// 与 WearPomodoro 风格的 ANDROID_KEYSTORE_* 环境变量），否则回退 debug keystore
+func resolveKeystore(cfg *AppConfig, projectDir string) keystoreRef {
+	home, _ := os.UserHomeDir()
+	debug := keystoreRef{
+		Path:          filepath.Join(home, ".android", "debug.keystore"),
+		StorePassword: "android",
+		KeyPassword:   "android",
+		IsDebug:       true,
+	}
+	if cfg == nil || !cfg.Release {
+		return debug
+	}
+	// 项目自定义约定：ANDROID_KEYSTORE_FILE/PASSWORD/ALIAS/KEY_PASSWORD 环境变量
+	if ks := os.Getenv("ANDROID_KEYSTORE_FILE"); ks != "" {
+		ref := keystoreRef{
+			Path:          ks,
+			StorePassword: os.Getenv("ANDROID_KEYSTORE_PASSWORD"),
+			KeyAlias:      os.Getenv("ANDROID_KEY_ALIAS"),
+			KeyPassword:   os.Getenv("ANDROID_KEY_PASSWORD"),
+		}
+		if fi, err := os.Stat(ref.Path); err == nil && !fi.IsDir() &&
+			ref.StorePassword != "" && ref.KeyAlias != "" {
+			return ref
+		}
+		fmt.Println("警告: ANDROID_KEYSTORE_* 环境变量不完整，回退 debug 证书")
+		return debug
+	}
+	// signingConfigs { create("release") {...} } 字面量/env 引用
+	name := cfg.SigningConfig
+	if name == "" {
+		name = "release"
+	}
+	sc, ok := cfg.SigningConfigs[name]
+	if !ok {
+		return debug
+	}
+	ref := keystoreRef{
+		Path:          resolveSigningValue(sc.StoreFile, projectDir),
+		StorePassword: resolveSigningValue(sc.StorePassword, projectDir),
+		KeyAlias:      resolveSigningValue(sc.KeyAlias, projectDir),
+		KeyPassword:   resolveSigningValue(sc.KeyPassword, projectDir),
+	}
+	if ref.Path != "" && ref.StorePassword != "" && ref.KeyAlias != "" {
+		if fi, err := os.Stat(ref.Path); err == nil && !fi.IsDir() {
+			return ref
+		}
+	}
+	fmt.Printf("警告: signingConfig %q 不完整或 keystore 缺失，回退 debug 证书\n", name)
+	return debug
+}
+
+// resolveSigningValue 解析 parser 产出的原始表达式：
+// "file:x"（相对项目根）、"env:X"、字面量
+func resolveSigningValue(v, projectDir string) string {
+	switch {
+	case strings.HasPrefix(v, "file:"):
+		rel := strings.TrimPrefix(v, "file:")
+		if filepath.IsAbs(rel) {
+			return rel
+		}
+		return filepath.Join(projectDir, rel)
+	case strings.HasPrefix(v, "env:"):
+		return os.Getenv(strings.TrimPrefix(v, "env:"))
+	}
+	return v
+}
+
+// SignApkTask 签名 APK（universal + per-ABI 全部签名）
 func SignApkTask(ctx *engine.BuildContext) *engine.Task {
+	cfg, _ := ctx.Config.(*AppConfig)
+	variants := apkVariants(cfg)
 	t := engine.NewTask("signApk")
-	t.AddFileInputs(filepath.Join(ctx.BuildDir, "app-debug.apk"))
-	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "app-signed.apk"))
+	for _, v := range variants {
+		t.AddFileInputs(filepath.Join(ctx.BuildDir, v.Name+".apk"))
+		t.AddFileOutputs(filepath.Join(ctx.BuildDir, v.Name+"-signed.apk"))
+	}
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		apksigner := filepath.Join(ctx.BuildTools, "apksigner")
-		appDebug := filepath.Join(ctx.BuildDir, "app-debug.apk")
-		appSigned := filepath.Join(ctx.BuildDir, "app-signed.apk")
-		home, _ := os.UserHomeDir()
-		keystore := filepath.Join(home, ".android", "debug.keystore")
-
+		ks := resolveKeystore(ctx.Config.(*AppConfig), ctx.ProjectDir)
+		if ks.IsDebug {
+			if _, err := os.Stat(ks.Path); err != nil {
+				fmt.Println("警告: debug.keystore 未找到，跳过签名")
+				for _, v := range variants {
+					copyFile(filepath.Join(ctx.BuildDir, v.Name+".apk"),
+						filepath.Join(ctx.BuildDir, v.Name+"-signed.apk"))
+				}
+				return true
+			}
+		} else {
+			fmt.Printf("release 签名: %s (alias=%s)\n", ks.Path, ks.KeyAlias)
+		}
 		if _, err := os.Stat(apksigner); err != nil {
 			fmt.Println("警告: apksigner 未找到，跳过签名")
-			copyFile(appDebug, appSigned)
-			return true
-		}
-		if _, err := os.Stat(keystore); err != nil {
-			fmt.Println("警告: debug.keystore 未找到，跳过签名")
-			copyFile(appDebug, appSigned)
+			for _, v := range variants {
+				copyFile(filepath.Join(ctx.BuildDir, v.Name+".apk"),
+					filepath.Join(ctx.BuildDir, v.Name+"-signed.apk"))
+			}
 			return true
 		}
 
-		// 先对齐再签名（AGP 流程）。未压缩的 .so 需 4KiB 页对齐才能被直接 mmap
-		input := zipAlignApk(ctx, appDebug)
+		for _, v := range variants {
+			unsigned := filepath.Join(ctx.BuildDir, v.Name+".apk")
+			signed := filepath.Join(ctx.BuildDir, v.Name+"-signed.apk")
+			// 先对齐再签名（AGP 流程）。未压缩的 .so 需 4KiB 页对齐才能被直接 mmap
+			input := zipAlignApk(ctx, unsigned)
 
-		args := []string{
-			"sign",
-			"--ks", keystore,
-			"--ks-pass", "pass:android",
-			"--key-pass", "pass:android",
-			"--out", appSigned,
-			input,
-		}
-		cmd := exec.Command(apksigner, args...)
-		if out, err := cmd.CombinedOutput(); err != nil {
-			fmt.Printf("签名失败: %s\n", string(out))
-			return false
+			args := []string{
+				"sign",
+				"--ks", ks.Path,
+				"--ks-pass", "pass:" + ks.StorePassword,
+				"--key-pass", "pass:" + ks.KeyPassword,
+				"--out", signed,
+				input,
+			}
+			if ks.KeyAlias != "" {
+				args = append(args[:3], append([]string{"--ks-key-alias", ks.KeyAlias}, args[3:]...)...)
+			}
+			cmd := exec.Command(apksigner, args...)
+			if out, err := cmd.CombinedOutput(); err != nil {
+				fmt.Printf("签名失败 %s: %s\n", v.Name, string(out))
+				return false
+			}
 		}
 		return true
 	}
@@ -489,7 +657,7 @@ func zipAlignApk(ctx *engine.BuildContext, apk string) string {
 		fmt.Println("警告: zipalign 未找到，跳过对齐")
 		return apk
 	}
-	aligned := filepath.Join(ctx.BuildDir, "app-aligned.apk")
+	aligned := strings.TrimSuffix(apk, ".apk") + "-aligned.apk"
 	out, err := exec.Command(zipalign, "-f", "-p", "4", apk, aligned).CombinedOutput()
 	if err != nil {
 		fmt.Printf("警告: zipalign 失败，使用未对齐 APK: %s\n", strings.TrimSpace(string(out)))

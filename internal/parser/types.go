@@ -2,48 +2,62 @@ package parser
 
 // Dependency 依赖声明
 type Dependency struct {
-	Group      string
-	Artifact   string
-	Version    string
-	Scope      string // implementation, api, compileOnly, runtimeOnly, etc.
-	IsPlatform bool   // platform(BOM) 声明
-	IsProject  bool   // project(":xxx") 声明
+	Group       string
+	Artifact    string
+	Version     string
+	Scope       string // implementation, api, compileOnly, runtimeOnly, etc.
+	IsPlatform  bool   // platform(BOM) 声明
+	IsProject   bool   // project(":xxx") 声明
 	ProjectPath string
 }
 
 // AndroidConfig android { } 块配置
 type AndroidConfig struct {
-	Namespace                string
-	CompileSDK               *float64 // 可能为 int(35) 或 float(37.1)
-	ApplicationID            string
-	MinSDK                   *int
-	TargetSDK                *int
-	VersionCode              *int
-	VersionName              string
+	Namespace                 string
+	CompileSDK                *float64 // 可能为 int(35) 或 float(37.1)
+	ApplicationID             string
+	MinSDK                    *int
+	TargetSDK                 *int
+	VersionCode               *int
+	VersionName               string
 	TestInstrumentationRunner string
-	JvmTarget                string
-	ComposeEnabled           bool
-	MinifyEnabled            bool
-	ShrinkResources          bool
-	ProguardFiles            []string
-	ABIFilters               []string
-	SourceCompatibility      string
-	TargetCompatibility      string
-	SigningConfig            string
-	BuildConfigFields        []string // 'type:name:value' 三元组（flavor buildConfigField）
-	SelectedFlavor           string
-	FlavorVersionNameSuffix  string
+	JvmTarget                 string
+	ComposeEnabled            bool
+	MinifyEnabled             bool
+	ShrinkResources           bool
+	ProguardFiles             []string
+	ABIFilters                []string
+	SourceCompatibility       string
+	TargetCompatibility       string
+	SigningConfig             string
+	BuildConfigFields         []string // 'type:name:value' 三元组（flavor buildConfigField）
+	SelectedFlavor            string
+	FlavorVersionNameSuffix   string
+	// splits.abi 配置：SplitABIEnable/SplitABIUniversalDecl 为显式声明才生效
+	SplitABIEnable        bool
+	SplitABIUniversalDecl *bool // nil=未声明（Gradle 默认 true）
+	SplitABIInclude       []string
+	// signingConfigs 中 create("name") 块的字段（storeFile 相对项目根解析）
+	SigningConfigs map[string]SigningConfigEntry
+}
+
+// SigningConfigEntry 一个签名配置（storeFile 相对项目根）
+type SigningConfigEntry struct {
+	StoreFile     string
+	StorePassword string
+	KeyAlias      string
+	KeyPassword   string
 }
 
 // ModuleConfig 模块配置
 type ModuleConfig struct {
-	Name           string
-	Path           string
-	Plugins        []string
-	PluginVersions map[string]string
-	Android        *AndroidConfig
-	Dependencies   []Dependency
-	BuildFeatures  map[string]bool
+	Name              string
+	Path              string
+	Plugins           []string
+	PluginVersions    map[string]string
+	Android           *AndroidConfig
+	Dependencies      []Dependency
+	BuildFeatures     map[string]bool
 	PackagingExcludes []string
 }
 
