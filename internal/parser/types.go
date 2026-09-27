@@ -39,6 +39,16 @@ type AndroidConfig struct {
 	SplitABIInclude       []string
 	// signingConfigs 中 create("name") 块的字段（storeFile 相对项目根解析）
 	SigningConfigs map[string]SigningConfigEntry
+	// androidComponents { onVariants(...) { ... } } 的变体级定制
+	VariantConfigs []VariantConfig
+}
+
+// VariantConfig androidComponents.onVariants 的定制（buildType 为空表示全部变体）
+type VariantConfig struct {
+	BuildType          string   // withBuildType("release") 过滤；空=全部
+	LocaleFilters      []string // androidResources.localeFilters.addAll(...)
+	UseLegacyPackaging *bool    // packaging.jniLibs.useLegacyPackaging.set(...)
+	ResourceExcludes   []string // packaging.resources.excludes.addAll(...)
 }
 
 // SigningConfigEntry 一个签名配置（storeFile 相对项目根）

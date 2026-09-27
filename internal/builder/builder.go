@@ -135,6 +135,9 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 			appConfig.SigningConfigs[name] = sc
 		}
 		appConfig.SigningConfig = mod.Android.SigningConfig
+		// androidComponents.onVariants 定制原样保留，Assemble 时按变体匹配
+		appConfig.VariantConfigs = append(appConfig.VariantConfigs, mod.Android.VariantConfigs...)
+		appConfig.PackagingExcludes = append(appConfig.PackagingExcludes, mod.PackagingExcludes...)
 		// splits.abi：universal APK 默认开启（Gradle 默认值），显式 false 关闭；
 		// include(...) 的 ABI 列表缺省回退 ndk.abiFilters
 		if mod.Android.SplitABIEnable {
@@ -241,6 +244,22 @@ func (b *Builder) variantKey() string {
 func (b *Builder) Assemble(release bool) error {
 	if cfg, ok := b.Context.Config.(*AppConfig); ok {
 		cfg.Release = release
+		// androidComponents.onVariants 定制按当前变体匹配（BuildType 空=全部变体）
+		variant := "debug"
+		if release {
+			variant = "release"
+		}
+		for _, vc := range cfg.VariantConfigs {
+			if vc.BuildType != "" && vc.BuildType != variant {
+				continue
+			}
+			cfg.LocaleFilters = append(cfg.LocaleFilters, vc.LocaleFilters...)
+			if vc.UseLegacyPackaging != nil {
+				cfg.UseLegacyPackaging = *vc.UseLegacyPackaging
+			}
+			cfg.ResourceExcludes = append(cfg.ResourceExcludes, vc.ResourceExcludes...)
+		}
+		cfg.ResourceExcludes = append(cfg.ResourceExcludes, cfg.PackagingExcludes...)
 	}
 	os.MkdirAll(b.BuildDir, 0755)
 	os.MkdirAll(b.CacheDir, 0755)

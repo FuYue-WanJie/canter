@@ -9,34 +9,40 @@ import (
 )
 
 var (
-	pluginAliasRe       = regexp.MustCompile(`alias\s*\(\s*libs\.plugins\.([\w.]+)\s*\)`)
-	pluginIDRe          = regexp.MustCompile(`id\s*\(\s*"([^"]*)"\s*(?:,\s*"([^"]*)")?\s*\)`)
-	pluginApplyRe       = regexp.MustCompile(`apply\s*\(\s*plugin\s*=\s*"([^"]*)"\s*\)`)
-	compileSdkNewRe     = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)\s*\{?[^}]*minorApiLevel\s*=\s*(\d+)`)
-	compileSdkRe        = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)`)
-	abiFilterRe         = regexp.MustCompile(`abiFilters\s*\+=\s*listOf\s*\(([^)]*)\)`)
-	proguardFilesRe     = regexp.MustCompile(`proguardFiles\s*\(([^)]*)\)`)
-	signingCfgRe        = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.getByName\s*\(\s*"([^"]*)"\s*\)`)
-	signingCfgFindRe    = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.findByName\s*\(\s*"([^"]*)"\s*\)`)
-	signingCreateRe     = regexp.MustCompile(`create\s*\(\s*"([^"]+)"\s*\)\s*\{`)
-	fileExprRe          = regexp.MustCompile(`(?:rootProject\.)?file\s*\(\s*"([^"]+)"\s*\)`)
-	getenvExprRe        = regexp.MustCompile(`System\.getenv\s*\(\s*"([^"]+)"\s*\)`)
-	quotedStrRe         = regexp.MustCompile(`"([^"]*)"`)
-	abiIncludeRe        = regexp.MustCompile(`include\s*\(([^)]*)\)`)
-	universalApkRe      = regexp.MustCompile(`isUniversalApk\s*=\s*(true|false)`)
-	abiEnableRe         = regexp.MustCompile(`isEnable\s*=\s*(true|false)`)
-	javaVersionRe       = regexp.MustCompile(`JavaVersion\.VERSION_(\w+)`)
-	bomDetectRe         = regexp.MustCompile(`platform\s*\(\s*libs\.([\w.]+)\s*\)`)
-	scopeStmtRe         = regexp.MustCompile(`(?s)(\w+)\s*\(\s*(.+?)\s*\)\s*$`)
-	platformShellRe     = regexp.MustCompile(`(?s)platform\s*\(\s*(.+?)\s*\)\s*$`)
-	libsAccessorRe      = regexp.MustCompile(`libs\.([\w.]+)\s*$`)
-	coordStrRe          = regexp.MustCompile(`"([^:]+):([^:]+):([^"]+)"`)
-	projectDepRe        = regexp.MustCompile(`project\s*\(\s*"([^"]*)"\s*\)`)
-	excludeSingleRe     = regexp.MustCompile(`excludes\s*\+=\s*"([^"]*)"`)
-	excludeListRe       = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
-	buildConfigFieldRe  = regexp.MustCompile(`buildConfigField\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)`)
-	createNameRe        = regexp.MustCompile(`create\s*\(\s*"([^"]*)"\s*\)`)
-	versionNameSuffixRe = regexp.MustCompile(`versionNameSuffix\s*=\s*"([^"]*)"`)
+	pluginAliasRe               = regexp.MustCompile(`alias\s*\(\s*libs\.plugins\.([\w.]+)\s*\)`)
+	pluginIDRe                  = regexp.MustCompile(`id\s*\(\s*"([^"]*)"\s*(?:,\s*"([^"]*)")?\s*\)`)
+	pluginApplyRe               = regexp.MustCompile(`apply\s*\(\s*plugin\s*=\s*"([^"]*)"\s*\)`)
+	compileSdkNewRe             = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)\s*\{?[^}]*minorApiLevel\s*=\s*(\d+)`)
+	compileSdkRe                = regexp.MustCompile(`release\s*\(\s*(\d+)\s*\)`)
+	abiFilterRe                 = regexp.MustCompile(`abiFilters\s*\+=\s*listOf\s*\(([^)]*)\)`)
+	proguardFilesRe             = regexp.MustCompile(`proguardFiles\s*\(([^)]*)\)`)
+	signingCfgRe                = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.getByName\s*\(\s*"([^"]*)"\s*\)`)
+	signingCfgFindRe            = regexp.MustCompile(`signingConfig\s*=\s*signingConfigs\.findByName\s*\(\s*"([^"]*)"\s*\)`)
+	signingCreateRe             = regexp.MustCompile(`create\s*\(\s*"([^"]+)"\s*\)\s*\{`)
+	fileExprRe                  = regexp.MustCompile(`(?:rootProject\.)?file\s*\(\s*"([^"]+)"\s*\)`)
+	getenvExprRe                = regexp.MustCompile(`System\.getenv\s*\(\s*"([^"]+)"\s*\)`)
+	quotedStrRe                 = regexp.MustCompile(`"([^"]*)"`)
+	withBuildTypeRe             = regexp.MustCompile(`withBuildType\s*\(\s*"([^"]+)"\s*\)`)
+	localeFiltersAddAllRe       = regexp.MustCompile(`localeFilters\.addAll\s*\(([^)]*)\)`)
+	resExcludesAddAllRe         = regexp.MustCompile(`resources\.excludes\.addAll\s*\(([^)]*)\)`)
+	legacyPackagingSetRe        = regexp.MustCompile(`useLegacyPackaging\.set\s*\(\s*(true|false)\s*\)`)
+	legacyPackagingFromBundleRe = regexp.MustCompile(`useLegacyPackagingFromBundle\.set\s*\(\s*(true|false)\s*\)`)
+	excludeAddRe                = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
+	abiIncludeRe                = regexp.MustCompile(`include\s*\(([^)]*)\)`)
+	universalApkRe              = regexp.MustCompile(`isUniversalApk\s*=\s*(true|false)`)
+	abiEnableRe                 = regexp.MustCompile(`isEnable\s*=\s*(true|false)`)
+	javaVersionRe               = regexp.MustCompile(`JavaVersion\.VERSION_(\w+)`)
+	bomDetectRe                 = regexp.MustCompile(`platform\s*\(\s*libs\.([\w.]+)\s*\)`)
+	scopeStmtRe                 = regexp.MustCompile(`(?s)(\w+)\s*\(\s*(.+?)\s*\)\s*$`)
+	platformShellRe             = regexp.MustCompile(`(?s)platform\s*\(\s*(.+?)\s*\)\s*$`)
+	libsAccessorRe              = regexp.MustCompile(`libs\.([\w.]+)\s*$`)
+	coordStrRe                  = regexp.MustCompile(`"([^:]+):([^:]+):([^"]+)"`)
+	projectDepRe                = regexp.MustCompile(`project\s*\(\s*"([^"]*)"\s*\)`)
+	excludeSingleRe             = regexp.MustCompile(`excludes\s*\+=\s*"([^"]*)"`)
+	excludeListRe               = regexp.MustCompile(`excludes\s*\+=\s*listOf\s*\(([^)]*)\)`)
+	buildConfigFieldRe          = regexp.MustCompile(`buildConfigField\s*\(\s*"([^"]*)"\s*,\s*"([^"]*)"\s*,\s*"([^"]*)"\s*\)`)
+	createNameRe                = regexp.MustCompile(`create\s*\(\s*"([^"]*)"\s*\)`)
+	versionNameSuffixRe         = regexp.MustCompile(`versionNameSuffix\s*=\s*"([^"]*)"`)
 )
 
 var buildFeaturesKeys = []string{
@@ -103,6 +109,7 @@ func (p BuildFileParser) Parse(buildPath string, catalog *VersionCatalog, gradle
 	p.parseDependencies(text, catalog, &module)
 	p.parseBuildFeatures(text, &module)
 	p.parsePackaging(text, &module)
+	p.parseAndroidComponents(text, &module)
 	return module
 }
 
@@ -419,4 +426,48 @@ func firstStringExpr(body, key string) string {
 		return sm[1]
 	}
 	return ""
+}
+
+// parseAndroidComponents 解析 androidComponents { onVariants(selector()...) { ... } }。
+// 支持 withBuildType("release") 过滤、localeFilters.addAll、useLegacyPackaging.set、
+// packaging.resources.excludes.addAll/excludes +=。
+func (p BuildFileParser) parseAndroidComponents(content string, module *ModuleConfig) {
+	blocks := p.Script.FindBlocks(content, "androidComponents")
+	for _, block := range blocks {
+		for _, call := range p.Script.FindCallBlocks(block, "onVariants") {
+			ov := call[1]
+			vc := VariantConfig{}
+			if m := withBuildTypeRe.FindStringSubmatch(call[0] + " " + ov); m != nil {
+				vc.BuildType = m[1]
+			}
+			// localeFilters.addAll("en", "zh")：属性链调用，直接正则
+			for _, m := range localeFiltersAddAllRe.FindAllStringSubmatch(ov, -1) {
+				vc.LocaleFilters = append(vc.LocaleFilters, p.Script.ExtractQuotedStrings(m[1])...)
+			}
+			if m := legacyPackagingSetRe.FindStringSubmatch(ov); m != nil {
+				v := m[1] == "true"
+				vc.UseLegacyPackaging = &v
+			}
+			if m := legacyPackagingFromBundleRe.FindStringSubmatch(ov); m != nil {
+				// useLegacyPackagingFromBundle.set(true) 隐含 legacy 打包
+				if m[1] == "true" && vc.UseLegacyPackaging == nil {
+					v := true
+					vc.UseLegacyPackaging = &v
+				}
+			}
+			// packaging.resources.excludes.addAll(...)：属性链调用
+			for _, m := range resExcludesAddAllRe.FindAllStringSubmatch(ov, -1) {
+				vc.ResourceExcludes = append(vc.ResourceExcludes, p.Script.ExtractQuotedStrings(m[1])...)
+			}
+			for _, m := range excludeAddRe.FindAllStringSubmatch(ov, -1) {
+				vc.ResourceExcludes = append(vc.ResourceExcludes, p.Script.ExtractQuotedStrings(m[1])...)
+			}
+			if vc.BuildType != "" || vc.LocaleFilters != nil || vc.UseLegacyPackaging != nil || vc.ResourceExcludes != nil {
+				if module.Android == nil {
+					module.Android = &AndroidConfig{}
+				}
+				module.Android.VariantConfigs = append(module.Android.VariantConfigs, vc)
+			}
+		}
+	}
 }

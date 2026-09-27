@@ -242,6 +242,10 @@ func Aapt2LinkTask(ctx *engine.BuildContext) *engine.Task {
 		if versionName != "" {
 			args = append(args, "--version-name", versionName)
 		}
+		// androidComponents: androidResources.localeFilters.addAll(...) → 配置过滤
+		if cfg, ok := ctx.Config.(*AppConfig); ok && len(cfg.LocaleFilters) > 0 {
+			args = append(args, "-c", strings.Join(cfg.LocaleFilters, ","))
+		}
 		cmd := exec.Command(aapt2, args...)
 		out, err := cmd.CombinedOutput()
 		if err != nil {

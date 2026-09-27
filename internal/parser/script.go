@@ -266,3 +266,83 @@ func (GradleScriptParser) ExtractQuotedStrings(s string) []string {
 	}
 	return out
 }
+
+// FindCallBlocks 查找 `name(args) { body }` 形式的调用块（args 括号平衡后再配对花括号）。
+// 返回 (args, body) 列表。用于 onVariants(selector()...) { ... } 这类 DSL。
+func (GradleScriptParser) FindCallBlocks(content, name string) [][2]string {
+	var result [][2]string
+	searchStart := 0
+	head := regexp.MustCompile(`\b` + regexp.QuoteMeta(name) + `\s*\(`)
+	for searchStart < len(content) {
+		m := head.FindStringIndex(content[searchStart:])
+		if m == nil {
+			break
+		}
+		parenStart := searchStart + m[1] - 1
+		depth := 1
+		i := parenStart + 1
+		for i < len(content) && depth > 0 {
+			switch content[i] {
+			case '(':
+				depth++
+			case ')':
+				depth--
+			case '"':
+				for i < len(content) && content[i] != '"' {
+					if content[i] == '\\' {
+						i++
+					}
+					i++
+				}
+			}
+			i++
+		}
+		if depth != 0 {
+			break
+		}
+		args := content[parenStart+1 : i-1]
+		// 跳过空白找 '{'
+		for i < len(content) && (content[i] == ' ' || content[i] == '\n' || content[i] == '\t' || content[i] == '\r') {
+			i++
+		}
+		if i >= len(content) || content[i] != '{' {
+			searchStart = i
+			continue
+		}
+		// 花括号配对
+		depth = 1
+		j := i + 1
+		inStr := false
+		for j < len(content) && depth > 0 {
+			c := content[j]
+			if inStr {
+				if c == '\\' {
+					j++
+				} else if c == '"' {
+					inStr = false
+				}
+			} else {
+				switch {
+				case c == '"':
+					inStr = true
+				case c == '/' && j+1 < len(content) && content[j+1] == '/':
+					for j < len(content) && content[j] != '\n' {
+						j++
+					}
+					continue
+				case c == '{':
+					depth++
+				case c == '}':
+					depth--
+				}
+			}
+			j++
+		}
+		if depth != 0 {
+			break
+		}
+		result = append(result, [2]string{args, content[i+1 : j-1]})
+		searchStart = j
+	}
+	return result
+}

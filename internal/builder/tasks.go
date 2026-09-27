@@ -2,11 +2,13 @@ package builder
 
 import (
 	"archive/zip"
+	"crypto/sha256"
 	"fmt"
 	"io"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"canter/internal/engine"
@@ -15,35 +17,40 @@ import (
 
 // AppConfig 应用配置（由 Builder 从 ProjectConfig 提取）
 type AppConfig struct {
-	Namespace         string
-	ApplicationID     string
-	VersionCode       string
-	VersionName       string
-	MinSDK            string
-	TargetSDK         string
-	CompileSDK        string
-	JvmTarget         string
-	ABIFilters        []string
-	ModuleName        string
-	ModuleDir         string
-	MinifyEnabled     bool
-	ShrinkResources   bool // release 构建时的资源收缩（isShrinkResources）
-	ProguardFiles     []string
-	Release           bool
-	BuildConfigs      []string // flavor buildConfigField 等额外字段（key=value）
-	SelectedFlavor    string
-	Parcelize         bool   // 是否启用 kotlin-parcelize 插件
-	Compose           bool   // 是否启用 Compose 编译器插件
-	Serialization     bool   // 是否启用 kotlin-serialization 插件
-	VersionNameSuffix string // flavor 的 versionNameSuffix
-	SplitABIEnable    bool   // splits.abi.isEnable
-	SplitABIUniversal bool   // universal APK（splits.abi.isUniversalApk，默认 true）
-	SplitABIInclude   []string
-	SigningConfigs    map[string]parser.SigningConfigEntry
-	SigningConfig     string   // release 使用的签名配置名
-	LibraryResDirs    []string // 项目 library 模块的 res 目录
-	LibraryAssets     []string // 项目 library 模块的 assets 目录
-	LibraryJniLibs    []string // 项目 library 模块的 jniLibs 目录
+	Namespace          string
+	ApplicationID      string
+	VersionCode        string
+	VersionName        string
+	MinSDK             string
+	TargetSDK          string
+	CompileSDK         string
+	JvmTarget          string
+	ABIFilters         []string
+	ModuleName         string
+	ModuleDir          string
+	MinifyEnabled      bool
+	ShrinkResources    bool // release 构建时的资源收缩（isShrinkResources）
+	ProguardFiles      []string
+	Release            bool
+	BuildConfigs       []string // flavor buildConfigField 等额外字段（key=value）
+	SelectedFlavor     string
+	Parcelize          bool   // 是否启用 kotlin-parcelize 插件
+	Compose            bool   // 是否启用 Compose 编译器插件
+	Serialization      bool   // 是否启用 kotlin-serialization 插件
+	VersionNameSuffix  string // flavor 的 versionNameSuffix
+	SplitABIEnable     bool   // splits.abi.isEnable
+	SplitABIUniversal  bool   // universal APK（splits.abi.isUniversalApk，默认 true）
+	SplitABIInclude    []string
+	SigningConfigs     map[string]parser.SigningConfigEntry
+	SigningConfig      string // release 使用的签名配置名
+	VariantConfigs     []parser.VariantConfig
+	LocaleFilters      []string
+	UseLegacyPackaging bool
+	ResourceExcludes   []string
+	PackagingExcludes  []string // android 块级 packaging.resources.excludes（全变体）
+	LibraryResDirs     []string // 项目 library 模块的 res 目录
+	LibraryAssets      []string // 项目 library 模块的 assets 目录
+	LibraryJniLibs     []string // 项目 library 模块的 jniLibs 目录
 }
 
 // MinifyCompatible 判断是否启用 R8 混淆
@@ -147,18 +154,25 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// MergeClassesTask 生成 merged_classes.jar（工程类 + 依赖类，同名先到先得）。
-// D8 与 R8 两条路径共用。
+// MergeClassesTask 生成 merged_classes.jar（工程类 + 依赖类，同名先到先得）
+// 与 merged_data.jar（依赖 jar 中的数据资源：META-INF/*.version、services、
+// kotlin_builtins 等，对齐 AGP 的 javaRes 合并）。D8 与 R8 两条路径共用。
 func MergeClassesTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("mergeClasses")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "libs"))
 	t.AddFileInputs(depsSignatureFile(ctx))
+	t.AddFileInputs(packagingConfigFile(ctx))
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "merged_classes.jar"))
+	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "merged_data.jar"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		if err := mergeClassesJar(ctx, filepath.Join(ctx.BuildDir, "merged_classes.jar")); err != nil {
 			fmt.Printf("合并类失败: %v\n", err)
+			return false
+		}
+		if err := mergeDataJar(ctx, filepath.Join(ctx.BuildDir, "merged_data.jar")); err != nil {
+			fmt.Printf("合并数据资源失败: %v\n", err)
 			return false
 		}
 		return true
@@ -166,7 +180,6 @@ func MergeClassesTask(ctx *engine.BuildContext) *engine.Task {
 	return t
 }
 
-// DexBuildTask D8 打包（合并工程类与依赖类后一次 D8，支持 multidex）
 func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("dexBuild")
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "merged_classes.jar"))
@@ -306,12 +319,80 @@ func apkVariants(cfg *AppConfig) []apkVariant {
 	return variants
 }
 
+// dataRulesVersion 数据资源默认排除规则的版本（规则变化时自动使 mergeClasses 缓存失效）
+const dataRulesVersion = 3
+
+// isSignatureLike 排除不该进 APK 的 jar 条目（各 jar 自带的清单与签名、
+// Kotlin module 元数据、proguard 规则与 maven 元数据——对齐 AGP 默认排除集）
+func isSignatureLike(name string) bool {
+	if name == "module-info.class" {
+		return true
+	}
+	if !strings.HasPrefix(name, "META-INF/") {
+		return false
+	}
+	upper := strings.ToUpper(name)
+	for _, ext := range []string{".SF", ".RSA", ".DSA", ".EC", ".LIST"} {
+		if strings.HasSuffix(upper, ext) {
+			return true
+		}
+	}
+	base := filepath.Base(name)
+	switch {
+	case base == "MANIFEST.MF":
+		return true // 含 META-INF/versions/*/OSGI-INF/MANIFEST.MF
+	case strings.HasSuffix(name, ".kotlin_module"):
+		return true
+	}
+	for _, prefix := range []string{
+		"META-INF/proguard/",
+		"META-INF/com.android.tools/",
+		"META-INF/maven/",
+		"META-INF/versions/",
+	} {
+		if strings.HasPrefix(name, prefix) {
+			return true
+		}
+	}
+	return false
+}
+
+// packagingConfigFile 打包配置标记文件：内容随 excludes/localeFilters/
+// legacyPackaging 变化，作为打包与签名任务的输入参与签名
+func packagingConfigFile(ctx *engine.BuildContext) string {
+	h := sha256.New()
+	cfg, _ := ctx.Config.(*AppConfig)
+	fmt.Fprintf(h, "rules=%d\n", dataRulesVersion)
+	if cfg != nil {
+		for _, e := range sortedStrings(cfg.ResourceExcludes) {
+			fmt.Fprintf(h, "ex=%s\n", e)
+		}
+		for _, l := range sortedStrings(cfg.LocaleFilters) {
+			fmt.Fprintf(h, "locale=%s\n", l)
+		}
+		fmt.Fprintf(h, "legacy=%v\n", cfg.UseLegacyPackaging)
+	}
+	path := filepath.Join(ctx.BuildDir, ".packaging-config")
+	os.MkdirAll(ctx.BuildDir, 0755)
+	if old, err := os.ReadFile(path); err != nil || string(old) != string(h.Sum(nil)) {
+		os.WriteFile(path, h.Sum(nil), 0644)
+	}
+	return path
+}
+
+func sortedStrings(s []string) []string {
+	out := append([]string{}, s...)
+	sort.Strings(out)
+	return out
+}
+
 // PackageApkTask 打包 APK
 func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("packageApk")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.AddFileInputs(depsSignatureFile(ctx))
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "resources.ap_"))
+	t.AddFileInputs(packagingConfigFile(ctx))
 	if cfg, ok := ctx.Config.(*AppConfig); ok {
 		for _, v := range apkVariants(cfg) {
 			t.AddFileOutputs(filepath.Join(ctx.BuildDir, v.Name+".apk"))
@@ -456,9 +537,26 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 			return nil
 		})
 
+		// 3d. 依赖 jar 的数据资源（META-INF/*.version、services、kotlin_builtins 等），
+		//     应用 packaging.resources.excludes（对齐 AGP packaging 流程）
+		var excludes []string
+		if cfg != nil {
+			excludes = cfg.ResourceExcludes
+		}
+		dataEntries := dataJarEntries(filepath.Join(ctx.BuildDir, "merged_data.jar"), excludes)
+		for name, data := range dataEntries {
+			dst := filepath.Join(tmpDir, filepath.FromSlash(name))
+			if err := os.MkdirAll(filepath.Dir(dst), 0755); err == nil {
+				os.WriteFile(dst, data, 0644)
+			}
+		}
+		if len(dataEntries) > 0 {
+			fmt.Printf("数据资源: %d 个条目入包（excludes %d 条）\n", len(dataEntries), len(excludes))
+		}
+
 		// 4. 打包 APK（universal + per-ABI）
 		for _, v := range apkVariants(cfg) {
-			if err := writeApk(tmpDir, filepath.Join(ctx.BuildDir, v.Name+".apk"), v.ABI); err != nil {
+			if err := writeApk(tmpDir, filepath.Join(ctx.BuildDir, v.Name+".apk"), v.ABI, cfg != nil && cfg.UseLegacyPackaging); err != nil {
 				fmt.Printf("打包 APK 失败: %v\n", err)
 				return false
 			}
@@ -476,7 +574,7 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 }
 
 // writeApk 将 tmpDir 内容打包为 APK；abi 非空时仅打包该 ABI 的 native 库
-func writeApk(tmpDir, apkPath, abi string) error {
+func writeApk(tmpDir, apkPath, abi string, legacyPackaging bool) error {
 	src := tmpDir
 	if abi != "" {
 		// per-ABI：在独立临时目录重排，仅保留该 ABI 的 lib/
@@ -514,8 +612,9 @@ func writeApk(tmpDir, apkPath, abi string) error {
 			return nil
 		}
 		rel := filepath.ToSlash(relPath)
-		// native 库不压缩（对齐 AGP：便于运行时 mmap，且与 Gradle 产物一致）
-		if strings.HasPrefix(rel, "lib/") && strings.HasSuffix(rel, ".so") {
+		// native 库打包策略：默认不压缩（对齐 AGP，便于运行时 mmap）；
+		// useLegacyPackaging=true 时压缩（安装时解压到文件系统，AGP release 常用）
+		if strings.HasPrefix(rel, "lib/") && strings.HasSuffix(rel, ".so") && !legacyPackaging {
 			w, err := zw.CreateHeader(&zip.FileHeader{Name: rel, Method: zip.Store})
 			if err != nil {
 				return nil
