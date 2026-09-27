@@ -123,6 +123,7 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 			appConfig.ABIFilters = mod.Android.ABIFilters
 		}
 		appConfig.MinifyEnabled = mod.Android.MinifyEnabled
+		appConfig.ShrinkResources = mod.Android.ShrinkResources
 		appConfig.ProguardFiles = mod.Android.ProguardFiles
 		appConfig.JvmTarget = mod.Android.JvmTarget
 		appConfig.BuildConfigs = mod.Android.BuildConfigFields
@@ -266,6 +267,9 @@ func (b *Builder) Assemble(release bool) error {
 		useR8 = true
 		fmt.Println("release + minifyEnabled=true → 使用 R8 混淆")
 	}
+	// 类合并：D8 与 R8 两条路径共用
+	mergeIdx := 6
+	tasks = append(tasks, MergeClassesTask(b.Context))
 	if useR8 {
 		tasks = append(tasks, R8MinifyTask(b.Context))
 	} else {
@@ -282,21 +286,14 @@ func (b *Builder) Assemble(release bool) error {
 	tasks[4].AddDependency("aapt2Link") // compileJava 需要 R.java
 	tasks[4].AddDependency("generateBuildConfig")
 	tasks[5].AddDependency("compileJava") // Kotlin 依赖 Java 类
-	dexIdx := 6
-	if useR8 {
-		tasks[dexIdx].AddDependency("compileKotlin")
-		tasks[dexIdx+1].AddDependency("aapt2Link")
-		tasks[dexIdx+1].AddDependency("r8Minify")
-		if len(tasks) > dexIdx+2 {
-			tasks[dexIdx+2].AddDependency("packageApk")
-		}
-	} else {
-		tasks[dexIdx].AddDependency("compileKotlin")
-		tasks[dexIdx+1].AddDependency("aapt2Link")
-		tasks[dexIdx+1].AddDependency("dexBuild")
-		if len(tasks) > dexIdx+2 {
-			tasks[dexIdx+2].AddDependency("packageApk")
-		}
+	tasks[mergeIdx].AddDependency("compileKotlin")
+	// mergeClasses 之后的任务索引：r8/dex=7, package=8, sign=9
+	dexIdx := mergeIdx + 1
+	tasks[dexIdx].AddDependency("mergeClasses")
+	tasks[dexIdx+1].AddDependency("aapt2Link")
+	tasks[dexIdx+1].AddDependency(tasks[dexIdx].Name)
+	if len(tasks) > dexIdx+2 {
+		tasks[dexIdx+2].AddDependency("packageApk")
 	}
 
 	// 任务缓存按变体隔离：debug/release（及 flavor）的输出语义不同，

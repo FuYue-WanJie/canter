@@ -27,9 +27,7 @@ func writeInlineRuleFile(buildDir, name, content string) string {
 // R8MinifyTask release 构建的 R8 混淆 + dex（替代 DexBuildTask 的高层步骤）
 func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 	t := engine.NewTask("r8Minify")
-	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
-	mergedJar := filepath.Join(ctx.BuildDir, "merged_classes.jar")
-	t.AddFileInputs(mergedJar)
+	t.AddFileInputs(filepath.Join(ctx.BuildDir, "merged_classes.jar"))
 	// manifest 与依赖集合参与签名：组件 keep 规则与 consumer 规则由二者派生
 	t.AddFileInputs(filepath.Join(ctx.BuildDir, "AndroidManifest_fixed.xml"))
 	t.AddFileInputs(depsSignatureFile(ctx))
@@ -47,6 +45,13 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 	}
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "mapping.txt"))
+	// 资源收缩：输入 proto 资源包，输出收缩后的 proto 包
+	shrinkRes := false
+	if cfg, ok := ctx.Config.(*AppConfig); ok && cfg.Release && cfg.ShrinkResources {
+		shrinkRes = true
+		t.AddFileInputs(filepath.Join(ctx.BuildDir, "resources-proto.zip"))
+		t.AddFileOutputs(filepath.Join(ctx.BuildDir, "resources-shrunk.zip"))
+	}
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("R8 混淆 + dex...")
 		// 新版 build-tools 不再单独提供 r8.jar，R8 与 D8 同打包在 lib/d8.jar
@@ -111,8 +116,15 @@ func R8MinifyTask(ctx *engine.BuildContext) *engine.Task {
 		}
 		mapping := filepath.Join(ctx.BuildDir, "mapping.txt")
 		cmdArgs = append(cmdArgs, "--pg-map-output", mapping)
+		if shrinkRes {
+			protoIn := filepath.Join(ctx.BuildDir, "resources-proto.zip")
+			if _, err := os.Stat(protoIn); err == nil {
+				cmdArgs = append(cmdArgs,
+					"--android-resources", protoIn, filepath.Join(ctx.BuildDir, "resources-shrunk.zip"))
+			}
+		}
 		cmdArgs = append(cmdArgs, "--output", dexDir)
-		cmdArgs = append(cmdArgs, mergedJar)
+		cmdArgs = append(cmdArgs, filepath.Join(ctx.BuildDir, "merged_classes.jar"))
 
 		javaBin := "java"
 		if ctx.JavaHome != "" {

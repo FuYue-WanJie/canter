@@ -94,14 +94,14 @@ func Aapt2CompileTask(ctx *engine.BuildContext) *engine.Task {
 }
 
 var (
-	activitySelfCloseRe   = regexp.MustCompile(`<activity\s[^>]*?/>`)
-	activityPairedRe      = regexp.MustCompile(`(?s)<activity\s[^>]*?>.*?</activity>`)
-	serviceSelfCloseRe    = regexp.MustCompile(`<service\s[^>]*?/>`)
-	servicePairedRe       = regexp.MustCompile(`(?s)<service\s[^>]*?>.*?</service>`)
-	receiverSelfCloseRe   = regexp.MustCompile(`<receiver\s[^>]*?/>`)
-	receiverPairedRe      = regexp.MustCompile(`(?s)<receiver\s[^>]*?>.*?</receiver>`)
-	providerSelfCloseRe   = regexp.MustCompile(`<provider\s[^>]*?/>`)
-	providerPairedRe      = regexp.MustCompile(`(?s)<provider\s[^>]*?>.*?</provider>`)
+	activitySelfCloseRe = regexp.MustCompile(`<activity\s[^>]*?/>`)
+	activityPairedRe    = regexp.MustCompile(`(?s)<activity\s[^>]*?>.*?</activity>`)
+	serviceSelfCloseRe  = regexp.MustCompile(`<service\s[^>]*?/>`)
+	servicePairedRe     = regexp.MustCompile(`(?s)<service\s[^>]*?>.*?</service>`)
+	receiverSelfCloseRe = regexp.MustCompile(`<receiver\s[^>]*?/>`)
+	receiverPairedRe    = regexp.MustCompile(`(?s)<receiver\s[^>]*?>.*?</receiver>`)
+	providerSelfCloseRe = regexp.MustCompile(`<provider\s[^>]*?/>`)
+	providerPairedRe    = regexp.MustCompile(`(?s)<provider\s[^>]*?>.*?</provider>`)
 )
 
 // scanAARManifests 收集依赖 AAR 内的 AndroidManifest.xml（返回待合并的库清单）
@@ -142,6 +142,7 @@ func Aapt2LinkTask(ctx *engine.BuildContext) *engine.Task {
 	manifest := filepath.Join(module, "src", "main", "AndroidManifest.xml")
 	t.AddFileInputs(manifest)
 	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "resources.ap_"))
+	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "resources-proto.zip"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("AAPT2 链接资源...")
 		aapt2 := filepath.Join(ctx.BuildTools, "aapt2")
@@ -250,6 +251,25 @@ func Aapt2LinkTask(ctx *engine.BuildContext) *engine.Task {
 			}
 			fmt.Printf("AAPT2 链接失败: %s\n", outStr)
 			return false
+		}
+
+		// 资源收缩（release + isShrinkResources）：额外产出 proto 格式资源包，
+		// 供 R8 收缩（--android-resources）后由打包阶段转回二进制
+		if cfg, ok := ctx.Config.(*AppConfig); ok && cfg.Release && cfg.ShrinkResources {
+			protoArgs := make([]string, 0, len(args)+2)
+			for _, a := range args {
+				protoArgs = append(protoArgs, a)
+			}
+			for i := 0; i < len(protoArgs)-1; i++ {
+				if protoArgs[i] == "-o" {
+					protoArgs[i+1] = filepath.Join(ctx.BuildDir, "resources-proto.zip")
+				}
+			}
+			protoArgs = append(protoArgs, "--proto-format")
+			pcmd := exec.Command(aapt2, protoArgs...)
+			if pout, perr := pcmd.CombinedOutput(); perr != nil {
+				fmt.Printf("AAPT2 proto link 失败（资源收缩将被跳过）: %s\n", string(pout))
+			}
 		}
 		return true
 	}

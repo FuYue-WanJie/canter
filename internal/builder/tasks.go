@@ -27,6 +27,7 @@ type AppConfig struct {
 	ModuleName        string
 	ModuleDir         string
 	MinifyEnabled     bool
+	ShrinkResources   bool // release 构建时的资源收缩（isShrinkResources）
 	ProguardFiles     []string
 	Release           bool
 	BuildConfigs      []string // flavor buildConfigField 等额外字段（key=value）
@@ -146,13 +147,29 @@ func copyTree(src, dst string) error {
 	})
 }
 
-// DexBuildTask D8 打包（合并工程类与依赖类后一次 D8，支持 multidex）
-func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
-	t := engine.NewTask("dexBuild")
+// MergeClassesTask 生成 merged_classes.jar（工程类 + 依赖类，同名先到先得）。
+// D8 与 R8 两条路径共用。
+func MergeClassesTask(ctx *engine.BuildContext) *engine.Task {
+	t := engine.NewTask("mergeClasses")
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "kotlin_classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "classes"))
 	t.AddDirInputs(filepath.Join(ctx.BuildDir, "libs"))
 	t.AddFileInputs(depsSignatureFile(ctx))
+	t.AddFileOutputs(filepath.Join(ctx.BuildDir, "merged_classes.jar"))
+	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
+		if err := mergeClassesJar(ctx, filepath.Join(ctx.BuildDir, "merged_classes.jar")); err != nil {
+			fmt.Printf("合并类失败: %v\n", err)
+			return false
+		}
+		return true
+	}
+	return t
+}
+
+// DexBuildTask D8 打包（合并工程类与依赖类后一次 D8，支持 multidex）
+func DexBuildTask(ctx *engine.BuildContext) *engine.Task {
+	t := engine.NewTask("dexBuild")
+	t.AddFileInputs(filepath.Join(ctx.BuildDir, "merged_classes.jar"))
 	t.AddDirOutputs(filepath.Join(ctx.BuildDir, "dex"))
 	t.ExecuteFunc = func(ctx *engine.BuildContext) bool {
 		fmt.Println("D8 打包...")
@@ -331,6 +348,22 @@ func PackageApkTask(ctx *engine.BuildContext) *engine.Task {
 
 		// 2. 解压 resources.ap_
 		resAP := filepath.Join(ctx.BuildDir, "resources.ap_")
+		// 资源收缩（release）：把 R8 收缩后的 proto 资源包转回二进制格式
+		shrunk := filepath.Join(ctx.BuildDir, "resources-shrunk.zip")
+		if _, err := os.Stat(shrunk); err == nil {
+			if cfg, ok := ctx.Config.(*AppConfig); ok && cfg.Release && cfg.ShrinkResources {
+				aapt2 := filepath.Join(ctx.BuildTools, "aapt2")
+				cout, cerr := exec.Command(aapt2, "convert", "--output-format", "binary",
+					"-o", resAP, shrunk).CombinedOutput()
+				if cerr != nil {
+					fmt.Printf("警告: 收缩资源转换失败，使用未收缩资源: %s\n", string(cout))
+				} else {
+					if si, serr := os.Stat(shrunk); serr == nil {
+						fmt.Printf("资源收缩: resources.ap_ 由 R8 收缩产物转换 (%dKB)\n", si.Size()/1024)
+					}
+				}
+			}
+		}
 		if zr, err := zip.OpenReader(resAP); err == nil {
 			for _, f := range zr.File {
 				dst := filepath.Join(tmpDir, f.Name)
