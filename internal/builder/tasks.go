@@ -43,6 +43,7 @@ type AppConfig struct {
 	SplitABIInclude    []string
 	SigningConfigs     map[string]parser.SigningConfigEntry
 	SigningConfig      string // release 使用的签名配置名
+	Flavors            map[string]parser.FlavorConfig
 	VariantConfigs     []parser.VariantConfig
 	LocaleFilters      []string
 	UseLegacyPackaging bool
@@ -303,9 +304,25 @@ type apkVariant struct {
 	ABI  string // 为空表示不过滤（universal）
 }
 
+// baseApkName 当前变体的产物基础名（带 flavor/buildType 标识，避免变体间互相覆盖）
+func baseApkName(cfg *AppConfig) string {
+	name := "app"
+	if cfg != nil {
+		if cfg.SelectedFlavor != "" {
+			name += "-" + cfg.SelectedFlavor
+		}
+		if cfg.Release {
+			name += "-release"
+		} else {
+			name += "-debug"
+		}
+	}
+	return name
+}
+
 // apkVariants 依据 splits.abi 配置返回本次构建的 APK 产出计划
 func apkVariants(cfg *AppConfig) []apkVariant {
-	variants := []apkVariant{{Name: "app-debug"}}
+	variants := []apkVariant{{Name: baseApkName(cfg)}}
 	if cfg == nil || !cfg.SplitABIEnable || len(cfg.SplitABIInclude) == 0 {
 		return variants
 	}
@@ -314,7 +331,7 @@ func apkVariants(cfg *AppConfig) []apkVariant {
 		variants = nil
 	}
 	for _, abi := range cfg.SplitABIInclude {
-		variants = append(variants, apkVariant{Name: "app-" + abi + "-debug", ABI: abi})
+		variants = append(variants, apkVariant{Name: baseApkName(cfg) + "-" + abi, ABI: abi})
 	}
 	return variants
 }
@@ -384,6 +401,32 @@ func sortedStrings(s []string) []string {
 	out := append([]string{}, s...)
 	sort.Strings(out)
 	return out
+}
+
+// variantMarkerFile 变体语义标记文件：内容为 flavor/buildType/versionNameSuffix/
+// buildConfigField 等的哈希。作为全部任务的输入参与签名，
+// 保证切换变体时生成类任务（manifest 合并、BuildConfig、编译等）必然重跑。
+func variantMarkerFile(ctx *engine.BuildContext) string {
+	h := sha256.New()
+	cfg, _ := ctx.Config.(*AppConfig)
+	fmt.Fprintf(h, "rules=%d\n", dataRulesVersion)
+	if cfg != nil {
+		fmt.Fprintf(h, "flavor=%s\n", cfg.SelectedFlavor)
+		fmt.Fprintf(h, "release=%v\n", cfg.Release)
+		fmt.Fprintf(h, "suffix=%s\n", cfg.VersionNameSuffix)
+		for _, f := range sortedStrings(cfg.BuildConfigs) {
+			fmt.Fprintf(h, "bc=%s\n", f)
+		}
+		for _, l := range sortedStrings(cfg.LocaleFilters) {
+			fmt.Fprintf(h, "locale=%s\n", l)
+		}
+	}
+	path := filepath.Join(ctx.BuildDir, ".variant-marker")
+	os.MkdirAll(ctx.BuildDir, 0755)
+	if old, err := os.ReadFile(path); err != nil || string(old) != string(h.Sum(nil)) {
+		os.WriteFile(path, h.Sum(nil), 0644)
+	}
+	return path
 }
 
 // PackageApkTask 打包 APK

@@ -39,6 +39,8 @@ type AndroidConfig struct {
 	SplitABIInclude       []string
 	// signingConfigs 中 create("name") 块的字段（storeFile 相对项目根解析）
 	SigningConfigs map[string]SigningConfigEntry
+	// productFlavors 全集（首个为默认选中）
+	Flavors map[string]FlavorConfig
 	// androidComponents { onVariants(...) { ... } } 的变体级定制
 	VariantConfigs []VariantConfig
 }
@@ -57,6 +59,13 @@ type SigningConfigEntry struct {
 	StorePassword string
 	KeyAlias      string
 	KeyPassword   string
+}
+
+// FlavorConfig 一个 productFlavor 的定制
+type FlavorConfig struct {
+	VersionNameSuffix string
+	BuildConfigFields []string // 'type:name:value' 三元组
+	ProguardFiles     []string
 }
 
 // ModuleConfig 模块配置

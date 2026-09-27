@@ -16,7 +16,7 @@ import (
 const usage = `Canter - 轻量级 Android 构建工具
 
 用法:
-  canter assemble [project] [-v] [--release] [--check-first]   构建项目（--release 启用 R8 混淆路径）
+  canter assemble [project] [-v] [--release] [--flavor F]      构建项目（--release 启用 R8；--flavor 选 productFlavor）
   canter clean [project]                           清理构建产物
   canter check [project]                           检查工具链
   canter mirror <action> [options]                 管理镜像源
@@ -58,13 +58,34 @@ func main() {
 // Go 的 flag 包遇到首个非选项参数即停止解析，而本工具的用法是
 // `canter assemble <project> --release`，故需先重排。
 func normalizeArgs(args []string) []string {
+	return normalizeArgsWithValue(args, "")
+}
+
+// normalizeArgsWithValue 同 normalizeArgs，且把带值选项的值随选项一起前置
+// （如 --flavor full 的 "full" 不能落在位置参数段）
+func normalizeArgsWithValue(args []string, valuedFlag string) []string {
 	var flags, positional []string
-	for _, a := range args {
+	i := 0
+	for i < len(args) {
+		a := args[i]
 		if strings.HasPrefix(a, "-") {
 			flags = append(flags, a)
-		} else {
-			positional = append(positional, a)
+			// -flavor full / --flavor=full：后者值已含在 token 内
+			name := strings.TrimLeft(a, "-")
+			if eq := strings.Index(name, "="); eq >= 0 {
+				i++
+				continue
+			}
+			if name == valuedFlag && i+1 < len(args) && !strings.HasPrefix(args[i+1], "-") {
+				flags = append(flags, args[i+1])
+				i += 2
+				continue
+			}
+			i++
+			continue
 		}
+		positional = append(positional, a)
+		i++
 	}
 	return append(flags, positional...)
 }
@@ -87,7 +108,9 @@ func cmdAssemble(args []string) {
 	verbose := fs.Bool("v", false, "verbose output")
 	checkFirst := fs.Bool("check-first", false, "check toolchain first")
 	release := fs.Bool("release", false, "build release variant (R8 when minifyEnabled)")
-	fs.Parse(normalizeArgs(args))
+	flavor := fs.String("flavor", "", "product flavor to build (default: first declared)")
+	// 选项值（如 --flavor full 的 "full"）需与 flag 一起前置，避免被当作位置参数
+	fs.Parse(normalizeArgsWithValue(args, "flavor"))
 	_ = verbose
 
 	projectDir := resolveProject(args, fs)
@@ -98,7 +121,8 @@ func cmdAssemble(args []string) {
 	}
 
 	b := builder.NewBuilder(projectDir, config)
-	if err := b.Assemble(*release); err != nil {
+	if err := b.Assemble(*release, *flavor); err != nil {
+		fmt.Fprintf(os.Stderr, "构建失败: %v\n", err)
 		os.Exit(1)
 	}
 }

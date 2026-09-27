@@ -80,6 +80,31 @@ func extractCreateBlockBody(parentContent string) string {
 	return ""
 }
 
+// extractNamedCreateBlockBody 提取指定名字的 create("name") { ... } 块体
+func extractNamedCreateBlockBody(parentContent, name string) string {
+	re := regexp.MustCompile(`create\s*\(\s*"` + regexp.QuoteMeta(name) + `"\s*\)\s*\{`)
+	loc := re.FindStringIndex(parentContent)
+	if loc == nil {
+		return ""
+	}
+	start := loc[1]
+	depth := 1
+	i := start
+	for i < len(parentContent) && depth > 0 {
+		c := parentContent[i]
+		if c == '{' {
+			depth++
+		} else if c == '}' {
+			depth--
+			if depth == 0 {
+				return parentContent[start:i]
+			}
+		}
+		i++
+	}
+	return ""
+}
+
 // Parse 解析 build.gradle.kts
 func (p BuildFileParser) Parse(buildPath string, catalog *VersionCatalog, gradleProps map[string]string) ModuleConfig {
 	parent := parentDir(buildPath)
@@ -204,20 +229,30 @@ func (p BuildFileParser) parseAndroidBlock(content string, module *ModuleConfig)
 		}
 	}
 
-	// productFlavors：取第一个 flavor 的 buildConfigField（默认 full/included 变体）
+	// productFlavors：解析全部 flavor（首个为默认选中），供按需构建各变体
 	if pf, ok := p.Script.FindBlock(block, "productFlavors"); ok {
-		// create("name") { ... } 形式用正则直接提取块
+		android.Flavors = map[string]FlavorConfig{}
+		for _, m := range createNameRe.FindAllStringSubmatch(pf, -1) {
+			name := m[1]
+			body := extractNamedCreateBlockBody(pf, name)
+			fc := FlavorConfig{}
+			for _, fm := range buildConfigFieldRe.FindAllStringSubmatch(body, -1) {
+				fc.BuildConfigFields = append(fc.BuildConfigFields, fm[1]+":"+fm[2]+":"+fm[3])
+			}
+			if fm := versionNameSuffixRe.FindStringSubmatch(body); fm != nil {
+				fc.VersionNameSuffix = fm[1]
+			}
+			if fm := proguardFilesRe.FindStringSubmatch(body); fm != nil {
+				fc.ProguardFiles = p.Script.ExtractQuotedStrings(fm[1])
+			}
+			android.Flavors[name] = fc
+		}
+		// 默认选中：显式顺序的第一个（Gradle 无默认，此前行为即取第一个）
 		if m := createNameRe.FindStringSubmatch(pf); m != nil {
 			android.SelectedFlavor = m[1]
-		}
-		// 提取第一个 create 块体内文本
-		if first := extractCreateBlockBody(pf); first != "" {
-			for _, m := range buildConfigFieldRe.FindAllStringSubmatch(first, -1) {
-				android.BuildConfigFields = append(android.BuildConfigFields,
-					m[1]+":"+m[2]+":"+m[3])
-			}
-			if m := versionNameSuffixRe.FindStringSubmatch(first); m != nil {
-				android.FlavorVersionNameSuffix = m[1]
+			if fc, ok := android.Flavors[m[1]]; ok {
+				android.BuildConfigFields = fc.BuildConfigFields
+				android.FlavorVersionNameSuffix = fc.VersionNameSuffix
 			}
 		}
 	}
@@ -237,7 +272,7 @@ func (p BuildFileParser) parseAndroidBlock(content string, module *ModuleConfig)
 				android.ShrinkResources = v
 			}
 			if m := proguardFilesRe.FindStringSubmatch(rel); m != nil {
-				android.ProguardFiles = p.Script.ExtractQuotedStrings(m[1])
+				android.ProguardFiles = append(android.ProguardFiles, p.Script.ExtractQuotedStrings(m[1])...)
 			}
 			if m := signingCfgRe.FindStringSubmatch(rel); m != nil {
 				android.SigningConfig = m[1]

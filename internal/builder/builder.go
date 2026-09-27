@@ -129,6 +129,10 @@ func NewBuilder(projectDir string, config *parser.ProjectConfig) *Builder {
 		appConfig.BuildConfigs = mod.Android.BuildConfigFields
 		appConfig.SelectedFlavor = mod.Android.SelectedFlavor
 		appConfig.VersionNameSuffix = mod.Android.FlavorVersionNameSuffix
+		appConfig.Flavors = map[string]parser.FlavorConfig{}
+		for name, fc := range mod.Android.Flavors {
+			appConfig.Flavors[name] = fc
+		}
 		appConfig.SplitABIEnable = mod.Android.SplitABIEnable
 		appConfig.SigningConfigs = map[string]parser.SigningConfigEntry{}
 		for name, sc := range mod.Android.SigningConfigs {
@@ -240,10 +244,42 @@ func (b *Builder) variantKey() string {
 	return "debug"
 }
 
+// flavorNames 返回全部 flavor 名（字典序，仅用于错误提示）
+func (b *Builder) flavorNames() []string {
+	var names []string
+	for _, mod := range b.Config.Modules {
+		if mod.Android != nil && mod.Android.Flavors != nil {
+			for name := range mod.Android.Flavors {
+				names = append(names, name)
+			}
+			break
+		}
+	}
+	sort.Strings(names)
+	return names
+}
+
 // Assemble 执行完整构建（release 决定是否启用 R8 混淆路径）
-func (b *Builder) Assemble(release bool) error {
+func (b *Builder) Assemble(release bool, flavor string) error {
 	if cfg, ok := b.Context.Config.(*AppConfig); ok {
 		cfg.Release = release
+		// 指定 flavor：切换选中 flavor 及其定制。proguardFiles 叠加
+		//（AGP 语义：buildType 与 flavor 的规则文件合并生效）
+		if flavor != "" && flavor != cfg.SelectedFlavor {
+			if fc, ok := cfg.Flavors[flavor]; ok {
+				cfg.SelectedFlavor = flavor
+				cfg.VersionNameSuffix = fc.VersionNameSuffix
+				cfg.BuildConfigs = fc.BuildConfigFields
+				cfg.ProguardFiles = append(cfg.ProguardFiles, fc.ProguardFiles...)
+			} else {
+				return fmt.Errorf("flavor %q 未在 productFlavors 中声明（可用: %v）", flavor, b.flavorNames())
+			}
+		} else if flavor == "" && cfg.SelectedFlavor != "" {
+			// 默认 flavor：其 proguardFiles 也要叠加（NewBuilder 只取了 buildType 的）
+			if fc, ok := cfg.Flavors[cfg.SelectedFlavor]; ok {
+				cfg.ProguardFiles = append(cfg.ProguardFiles, fc.ProguardFiles...)
+			}
+		}
 		// androidComponents.onVariants 定制按当前变体匹配（BuildType 空=全部变体）
 		variant := "debug"
 		if release {
@@ -297,6 +333,9 @@ func (b *Builder) Assemble(release bool) error {
 	tasks = append(tasks, PackageApkTask(b.Context), SignApkTask(b.Context))
 
 	for _, t := range tasks {
+		// 变体标记参与全部任务签名：flavor/buildType/suffix/buildConfigField
+		// 不在文件输入里体现，缺它会导致切换变体时缓存误命中（产物串味）
+		t.AddFileInputs(variantMarkerFile(b.Context))
 		graph.AddTask(t)
 	}
 	// 依赖图（对齐 AGP 有向无环结构）
