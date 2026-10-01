@@ -15,8 +15,8 @@ type ConvertResult struct {
 	ProjectName string
 }
 
-// ToCanter 从项目配置生成 canter.toml（供 --to-canter 使用）。
-// 若源为 Gradle，则先静态解析 Gradle；否则读现有 canter.toml。
+// ToCanter 生成 canter.toml（供 --to-canter 使用）。
+// 优先从 Gradle 配置解析转换；若项目没有 Gradle 配置，则规范化现有 canter.toml。
 // 返回写出的文件路径。
 func ToCanter(projectDir string, force bool) (*ConvertResult, error) {
 	path := filepath.Join(projectDir, CanterFileName)
@@ -25,12 +25,34 @@ func ToCanter(projectDir string, force bool) (*ConvertResult, error) {
 			return nil, fmt.Errorf("%s 已存在，使用 --force 覆盖", path)
 		}
 	}
-	config, source := LoadProject(projectDir)
+	var (
+		config *ProjectConfig
+		source string
+	)
+	if hasGradleConfig(projectDir) {
+		config = GradleConfigParser{}.parseGradle(projectDir)
+		source = "gradle"
+	} else if c, ok := ParseCanterConfig(projectDir); ok {
+		config = c
+		source = "canter"
+	} else {
+		return nil, fmt.Errorf("未找到 Gradle 配置或 %s，无内容可转换", CanterFileName)
+	}
 	if err := os.WriteFile(path, []byte(WriteCanterConfig(config)), 0644); err != nil {
 		return nil, err
 	}
 	rel, _ := filepath.Rel(projectDir, path)
 	return &ConvertResult{From: source, To: "canter", Written: []string{filepath.ToSlash(rel)}, ProjectName: config.ProjectName}, nil
+}
+
+// hasGradleConfig 判断项目是否存在 Gradle settings 文件。
+func hasGradleConfig(projectDir string) bool {
+	for _, name := range []string{"settings.gradle.kts", "settings.gradle"} {
+		if _, err := os.Stat(filepath.Join(projectDir, name)); err == nil {
+			return true
+		}
+	}
+	return false
 }
 
 // ToGradle 从 canter.toml 生成 Gradle 配置文件集合（settings/build.gradle.kts/libs.versions.toml）。
