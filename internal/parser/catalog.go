@@ -101,12 +101,12 @@ type pomDependencyManagement struct {
 }
 
 type pomModel struct {
-	XMLName              xml.Name               `xml:"project"`
-	GroupID              string                 `xml:"groupId"`
-	ArtifactID           string                 `xml:"artifactId"`
-	Version              string                 `xml:"version"`
-	Packaging            string                 `xml:"packaging"`
-	Dependencies         []pomDependency        `xml:"dependencies>dependency"`
+	XMLName              xml.Name                `xml:"project"`
+	GroupID              string                  `xml:"groupId"`
+	ArtifactID           string                  `xml:"artifactId"`
+	Version              string                  `xml:"version"`
+	Packaging            string                  `xml:"packaging"`
+	Dependencies         []pomDependency         `xml:"dependencies>dependency"`
 	DependencyManagement pomDependencyManagement `xml:"dependencyManagement"`
 }
 

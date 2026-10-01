@@ -78,6 +78,9 @@ type ModuleConfig struct {
 	Dependencies      []Dependency
 	BuildFeatures     map[string]bool
 	PackagingExcludes []string
+	// IncludeBuild 标记该模块来自 composite build（settings 的 includeBuild），
+	// 值为 includeBuild 的根相对路径；普通 include 模块为空。
+	IncludeBuild string
 }
 
 // ProjectConfig 完整项目配置

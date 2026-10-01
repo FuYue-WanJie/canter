@@ -11,8 +11,25 @@ type GradleConfigParser struct {
 	Script GradleScriptParser
 }
 
-// Parse 解析整个项目的 Gradle 配置
+// LoadProject 加载项目配置，并返回实际使用的来源（"canter" 或 "gradle"）。
+// 若项目根目录存在 canter.toml，则优先使用 Canter 原生配置（可与 Gradle 配置共存）；
+// 否则回退到静态解析 Gradle 配置。
+func LoadProject(projectDir string) (*ProjectConfig, string) {
+	if config, ok := ParseCanterConfig(projectDir); ok {
+		return config, "canter"
+	}
+	return GradleConfigParser{}.parseGradle(projectDir), "gradle"
+}
+
+// Parse 解析项目配置（canter.toml 优先，回退 Gradle）。
 func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
+	config, _ := LoadProject(projectDir)
+	return config
+}
+
+// parseGradle 静态解析 Gradle 工程配置。
+func (g GradleConfigParser) parseGradle(projectDir string) *ProjectConfig {
+	Script := g.Script
 	config := &ProjectConfig{
 		RootDir:          projectDir,
 		Catalog:          NewVersionCatalog(),
@@ -22,7 +39,7 @@ func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
 	config.GradleProperties = GradlePropertiesParser{}.Parse(filepath.Join(projectDir, "gradle.properties"))
 	config.Catalog = VersionCatalogParser{}.Parse(filepath.Join(projectDir, "gradle", "libs.versions.toml"))
 
-	settingsResult := SettingsParser{Script: g.Script}.Parse(filepath.Join(projectDir, "settings.gradle.kts"))
+	settingsResult := SettingsParser{Script: Script}.Parse(filepath.Join(projectDir, "settings.gradle.kts"))
 	config.ProjectName = settingsResult.ProjectName
 	repos := settingsResult.Repositories
 	pluginRepos := settingsResult.PluginRepositories
@@ -47,7 +64,7 @@ func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
 				continue
 			}
 		}
-		module := BuildFileParser{Script: g.Script}.Parse(buildFile, config.Catalog, config.GradleProperties)
+		module := BuildFileParser{Script: Script}.Parse(buildFile, config.Catalog, config.GradleProperties)
 		config.Modules = append(config.Modules, module)
 	}
 
@@ -58,7 +75,7 @@ func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
 		if _, err := os.Stat(ibSettingsPath); err != nil {
 			ibSettingsPath = filepath.Join(ibDir, "settings.gradle")
 		}
-		ibSettings := SettingsParser{Script: g.Script}.Parse(ibSettingsPath)
+		ibSettings := SettingsParser{Script: Script}.Parse(ibSettingsPath)
 		for _, inc := range ibSettings.Includes {
 			rel := strings.TrimLeft(inc, ":")
 			rel = strings.ReplaceAll(rel, ":", "/")
@@ -73,7 +90,8 @@ func (g GradleConfigParser) Parse(projectDir string) *ProjectConfig {
 					continue
 				}
 			}
-			module := BuildFileParser{Script: g.Script}.Parse(buildFile, config.Catalog, config.GradleProperties)
+			module := BuildFileParser{Script: Script}.Parse(buildFile, config.Catalog, config.GradleProperties)
+			module.IncludeBuild = filepath.ToSlash(strings.TrimLeft(ib, "./"))
 			config.Modules = append(config.Modules, module)
 		}
 	}

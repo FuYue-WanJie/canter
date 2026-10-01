@@ -11,6 +11,7 @@ import (
 	"canter/internal/checker"
 	"canter/internal/mirror"
 	"canter/internal/parser"
+	"canter/internal/version"
 )
 
 const usage = `Canter - 轻量级 Android 构建工具
@@ -22,6 +23,9 @@ const usage = `Canter - 轻量级 Android 构建工具
   canter mirror <action> [options]                 管理镜像源
   canter parse [project]                           解析并显示 Gradle 配置
   canter deps [project]                            下载依赖
+  canter convert --to-canter [project]             由 Gradle 配置生成 canter.toml
+  canter convert --to-gradle [project]             由 canter.toml 生成 Gradle 配置
+  canter version                                   显示版本信息
 `
 
 func main() {
@@ -45,6 +49,10 @@ func main() {
 		cmdParse(args)
 	case "deps":
 		cmdDeps(args)
+	case "convert":
+		cmdConvert(args)
+	case "version", "--version", "-V":
+		fmt.Println(version.String())
 	case "-h", "--help", "help":
 		fmt.Print(usage)
 	default:
@@ -160,8 +168,9 @@ func cmdParse(args []string) {
 	fs := flag.NewFlagSet("parse", flag.ExitOnError)
 	fs.Parse(normalizeArgs(args))
 	projectDir := resolveProject(args, fs)
-	config := parser.GradleConfigParser{}.Parse(projectDir)
+	config, source := parser.LoadProject(projectDir)
 
+	fmt.Printf("配置来源: %s\n", source)
 	fmt.Printf("项目名称: %s\n", config.ProjectName)
 	fmt.Printf("根目录: %s\n", config.RootDir)
 	fmt.Println("模块:")
@@ -204,6 +213,39 @@ func cmdParse(args []string) {
 	}
 	fmt.Printf("仓库: %v\n", config.Repositories)
 	fmt.Printf("插件仓库: %v\n", config.PluginRepositories)
+}
+
+func cmdConvert(args []string) {
+	fs := flag.NewFlagSet("convert", flag.ExitOnError)
+	toCanter := fs.Bool("to-canter", false, "生成 canter.toml（由 Gradle 配置）")
+	toGradle := fs.Bool("to-gradle", false, "生成 Gradle 配置（由 canter.toml）")
+	force := fs.Bool("force", false, "覆盖已存在的文件")
+	fs.Parse(normalizeArgs(args))
+	projectDir := resolveProject(args, fs)
+
+	if *toCanter == *toGradle {
+		fmt.Fprintln(os.Stderr, "请指定 --to-canter 或 --to-gradle 之一")
+		os.Exit(1)
+	}
+
+	var (
+		res *parser.ConvertResult
+		err error
+	)
+	if *toCanter {
+		res, err = parser.ToCanter(projectDir, *force)
+	} else {
+		res, err = parser.ToGradle(projectDir, *force)
+	}
+	if err != nil {
+		fmt.Fprintf(os.Stderr, "转换失败: %v\n", err)
+		os.Exit(1)
+	}
+	fmt.Printf("项目: %s\n", res.ProjectName)
+	fmt.Printf("转换: %s -> %s\n", res.From, res.To)
+	for _, f := range res.Written {
+		fmt.Printf("  写入 %s\n", f)
+	}
 }
 
 func cmdDeps(args []string) {

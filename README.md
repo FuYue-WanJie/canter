@@ -1,5 +1,7 @@
 # Canter
 
+> 版本：**Preview 1**
+
 Canter 是一个用 Go 编写的轻量级 Android 构建工具。它直接解析 Gradle 工程，自行完成依赖解析、Kotlin/Java 编译、资源处理、D8/R8 与打包签名，**不启动 Gradle daemon**，即可构建真实项目的 debug 与 release 变体并产出可安装 APK。
 
 Canter 由早期 Python 原型 MiniBuild 重写而来，目标是对标 Gradle/AGP 的构建行为，产物与之保持高度一致。
@@ -10,6 +12,11 @@ Canter 由早期 Python 原型 MiniBuild 重写而来，目标是对标 Gradle/A
 - `settings.gradle.kts`、`build.gradle.kts`、`libs.versions.toml`、`gradle.properties`、多模块、`includeBuild`（composite build）
 - `productFlavors`（buildConfigField、versionNameSuffix、proguardFiles）、`buildTypes`、`splits.abi`、`signingConfigs`
 - `androidComponents.onVariants` 的 `localeFilters`、`useLegacyPackaging`、`packaging.resources.excludes`
+
+**Canter 原生配置**（`canter.toml`）
+- 单一 TOML 文件即可完整描述项目（模块、Android 配置、依赖、版本目录、仓库），可替代整个 Gradle 配置文件集合
+- 与 Gradle 配置**共存**：项目根存在 `canter.toml` 时优先使用，否则自动回退解析 Gradle
+- 双向转换：`canter convert --to-canter` 由 Gradle 生成 `canter.toml`；`canter convert --to-gradle` 由 `canter.toml` 生成 `settings.gradle.kts` + 各模块 `build.gradle.kts` + `gradle/libs.versions.toml`
 
 **依赖解析**
 - 全图 BFS + 版本冲突消解；Maven 版本范围归一化
@@ -78,6 +85,10 @@ export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 ./canter deps   <project>              # 预下载依赖
 ./canter clean  <project>              # 清理构建产物
 ./canter mirror list|select|combo|speedtest|auto   # 镜像源管理
+
+# Canter 原生配置与 Gradle 配置互转
+./canter convert --to-canter <project>   # 由 Gradle 生成 canter.toml
+./canter convert --to-gradle <project>   # 由 canter.toml 生成 Gradle 配置（--force 覆盖）
 ```
 
 环境变量：
@@ -93,6 +104,60 @@ export PATH="$JAVA_HOME/bin:$ANDROID_SDK_ROOT/platform-tools:$PATH"
 
 - `~/.canter/`：镜像配置（`mirrors.json`）、依赖缓存（`cache/`）、工具链（`toolchain/`）
 - `<project>/build/canter/`：构建产物（`app-<flavor>-<buildType>[-abi]-signed.apk` 等）
+
+## Canter 原生配置（canter.toml）
+
+在项目根放置 `canter.toml` 即可完整描述工程；Canter 会优先读取它，忽略 Gradle 配置（两者可同时存在）。删除该文件即回退到 Gradle 解析。
+
+```toml
+[project]
+name = "Demo"
+repositories = ["google", "mavenCentral"]
+
+[versions]
+kotlin = "2.1.0"
+
+[libraries]
+androidx-core-ktx = { group = "androidx.core", name = "core-ktx", version.ref = "kotlin" }
+
+[plugins]
+android-application = { id = "com.android.application", version = "8.7.0" }
+
+[[modules]]
+name = "app"
+path = "app"
+plugins = ["com.android.application"]
+
+[modules.android]
+namespace = "com.demo"
+compileSdk = 36
+applicationId = "com.demo"
+minSdk = 26
+targetSdk = 36
+versionCode = 1
+versionName = "1.0"
+minifyEnabled = true
+
+[[modules.dependencies]]
+scope = "implementation"
+group = "androidx.core"
+artifact = "core-ktx"
+version = "1.15.0"
+
+[[modules.dependencies]]
+scope = "implementation"
+library = "androidx-core-ktx"      # 也可引用 [libraries] 访问器
+```
+
+完整字段可由转换命令生成后参考：
+
+```bash
+# 由现有 Gradle 工程生成 canter.toml（其后可直接编辑）
+./canter convert --to-canter <project>
+
+# 由 canter.toml 反向生成 Gradle 配置文件
+./canter convert --to-gradle <project>
+```
 
 ## 目录结构
 
@@ -134,6 +199,7 @@ canter/
 - `.module` 的 `strictly` 已解析但消解器尚未按其降版
 - 依赖图存在少量残余差异（如 `androidx.lifecycle:lifecycle-livedata-core-ktx`）
 - 仅调试签名参与自动化验证；release 签名需项目或环境变量提供密钥
+- Canter 原生配置目前为项目级单文件（`canter.toml`），尚无模块级覆盖文件；转换为 Gradle 时生成规范化写法，语义等价
 
 ## 参考
 
