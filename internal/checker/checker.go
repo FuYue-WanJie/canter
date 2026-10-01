@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"regexp"
 	"runtime"
+	"sort"
 	"strconv"
 	"strings"
 	"time"
@@ -242,17 +243,8 @@ func (c *ToolchainChecker) CheckAndroidSDK(config *parser.ProjectConfig) CheckRe
 // CheckBuildTools 检测 build-tools
 func (c *ToolchainChecker) CheckBuildTools(config *parser.ProjectConfig) CheckResult {
 	result := CheckResult{Name: "build-tools", Category: "sdk"}
-	compileSDK := "35"
-	for _, mod := range config.Modules {
-		if mod.Android != nil && mod.Android.CompileSDK != nil {
-			compileSDK = formatCompileSDK(*mod.Android.CompileSDK)
-			break
-		}
-	}
-	btVersion := compileSDK + ".0.0"
-	if strings.Contains(compileSDK, ".") {
-		btVersion = compileSDK + ".0"
-	}
+	compileSDK := resolveCompileSDK(config)
+	btVersion := buildToolsVersionFor(compileSDK)
 	btDir := filepath.Join(c.AndroidSDK, "build-tools", btVersion)
 
 	var available []string
@@ -266,6 +258,18 @@ func (c *ToolchainChecker) CheckBuildTools(config *parser.ProjectConfig) CheckRe
 
 	_, statErr := os.Stat(btDir)
 	result.Found = statErr == nil
+	if !result.Found {
+		// 与 builder 一致的回退：优先同 major 前缀，否则最高可用版本
+		if resolved, ok := resolveBuildToolsDir(c.AndroidSDK, compileSDK, available); ok {
+			btDir = resolved
+			btVersion = filepath.Base(resolved)
+			result.Version = &btVersion
+			result.Found = true
+			result.Message = "Build Tools " + btVersion + "（compileSdk " + compileSDK + " 的默认版本不可用，已回退）"
+			c.Results = append(c.Results, result)
+			return result
+		}
+	}
 	result.Version = &btVersion
 
 	if result.Found {
@@ -287,16 +291,48 @@ func (c *ToolchainChecker) CheckBuildTools(config *parser.ProjectConfig) CheckRe
 	return result
 }
 
+// resolveCompileSDK 取项目中声明的 compileSdk，缺省 35。
+func resolveCompileSDK(config *parser.ProjectConfig) string {
+	if config != nil {
+		for _, mod := range config.Modules {
+			if mod.Android != nil && mod.Android.CompileSDK != nil {
+				return formatCompileSDK(*mod.Android.CompileSDK)
+			}
+		}
+	}
+	return "35"
+}
+
+// buildToolsVersionFor 由 compileSdk 推导默认 build-tools 版本。
+// 整型（35）-> "35.0.0"；带小版本（36.1/37.1）-> "36.1.0"/"37.1.0"。
+func buildToolsVersionFor(compileSDK string) string {
+	if strings.Contains(compileSDK, ".") {
+		return compileSDK + ".0"
+	}
+	return compileSDK + ".0.0"
+}
+
+// resolveBuildToolsDir 在已安装 build-tools 中回退选择：同 major 前缀优先，否则最高版本。
+func resolveBuildToolsDir(sdkRoot, compileSDK string, available []string) (string, bool) {
+	if len(available) == 0 {
+		return "", false
+	}
+	major := strings.SplitN(compileSDK, ".", 2)[0]
+	sorted := append([]string(nil), available...)
+	sort.Strings(sorted)
+	highest := sorted[len(sorted)-1]
+	for _, name := range sorted {
+		if strings.HasPrefix(name, major) {
+			return filepath.Join(sdkRoot, "build-tools", name), true
+		}
+	}
+	return filepath.Join(sdkRoot, "build-tools", highest), true
+}
+
 // CheckPlatform 检测 platform
 func (c *ToolchainChecker) CheckPlatform(config *parser.ProjectConfig) CheckResult {
 	result := CheckResult{Name: "platform", Category: "sdk"}
-	compileSDK := "35"
-	for _, mod := range config.Modules {
-		if mod.Android != nil && mod.Android.CompileSDK != nil {
-			compileSDK = formatCompileSDK(*mod.Android.CompileSDK)
-			break
-		}
-	}
+	compileSDK := resolveCompileSDK(config)
 	platformDir := filepath.Join(c.AndroidSDK, "platforms", "android-"+compileSDK)
 	jarPath := filepath.Join(platformDir, "android.jar")
 
@@ -312,6 +348,19 @@ func (c *ToolchainChecker) CheckPlatform(config *parser.ProjectConfig) CheckResu
 	_, jarErr := os.Stat(jarPath)
 	result.Found = jarErr == nil
 	result.Version = &compileSDK
+
+	if !result.Found {
+		// 与 builder 一致的候选回退：android-<sdk> / <sdk>.0 / <major>.0 / <major>
+		major := strings.SplitN(compileSDK, ".", 2)[0]
+		for _, cand := range []string{"android-" + compileSDK, "android-" + compileSDK + ".0", "android-" + major + ".0", "android-" + major} {
+			if info, err := os.Stat(filepath.Join(c.AndroidSDK, "platforms", cand, "android.jar")); err == nil && !info.IsDir() {
+				result.Found = true
+				result.Message = fmt.Sprintf("Platform %s（compileSdk %s 的平台目录不存在，已回退）", cand, compileSDK)
+				c.Results = append(c.Results, result)
+				return result
+			}
+		}
+	}
 
 	if result.Found {
 		result.Message = "Platform android-" + compileSDK

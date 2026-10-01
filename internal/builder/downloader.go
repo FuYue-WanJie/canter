@@ -137,16 +137,18 @@ func (d *Downloader) FetchPOM(group, artifact, version string) (string, error) {
 			return src, nil
 		}
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
+	var lastErr error
 	for _, repo := range d.Repos {
 		url := fmt.Sprintf("%s/%s/%s/%s/%s-%s.pom",
 			strings.TrimRight(repo, "/"), groupPath, artifact, version, artifact, version)
-		resp, err := client.Get(url)
+		resp, err := httpGetWithRetry(client, url, 3)
 		if err != nil {
+			lastErr = err
 			continue
 		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+		if resp == nil {
+			// 404：该仓库确实不存在，换下一个仓库
 			continue
 		}
 		os.MkdirAll(filepath.Dir(pomPath), 0755)
@@ -158,7 +160,41 @@ func (d *Downloader) FetchPOM(group, artifact, version string) (string, error) {
 		resp.Body.Close()
 		return pomPath, nil
 	}
+	if lastErr != nil {
+		return "", fmt.Errorf("pom 获取网络失败: %s:%s:%s: %w", group, artifact, version, lastErr)
+	}
 	return "", fmt.Errorf("pom not found: %s:%s:%s", group, artifact, version)
+}
+
+// httpGetWithRetry 发起 GET，仅对瞬时错误（网络错误/5xx/429）重试。
+// 返回 (resp, nil) 表示 200；返回 (nil, nil) 表示 404/410（确实不存在，不重试）；
+// 返回 (nil, err) 表示重试耗尽后仍失败（网络问题）。
+func httpGetWithRetry(client *http.Client, url string, maxAttempts int) (*http.Response, error) {
+	var lastErr error
+	for attempt := 1; attempt <= maxAttempts; attempt++ {
+		resp, err := client.Get(url)
+		if err != nil {
+			lastErr = err
+		} else {
+			switch {
+			case resp.StatusCode == http.StatusOK:
+				return resp, nil
+			case resp.StatusCode == http.StatusNotFound || resp.StatusCode == http.StatusGone:
+				resp.Body.Close()
+				return nil, nil
+			case resp.StatusCode == http.StatusTooManyRequests || resp.StatusCode >= 500:
+				resp.Body.Close()
+				lastErr = fmt.Errorf("HTTP %d", resp.StatusCode)
+			default:
+				resp.Body.Close()
+				return nil, nil
+			}
+		}
+		if attempt < maxAttempts {
+			time.Sleep(time.Duration(attempt) * 500 * time.Millisecond)
+		}
+	}
+	return nil, lastErr
 }
 
 // FetchModule 获取 Gradle Module Metadata（.module）：
@@ -179,15 +215,14 @@ func (d *Downloader) FetchModule(group, artifact, version string) (string, error
 			return src, nil
 		}
 	}
-	client := &http.Client{Timeout: 5 * time.Second}
+	client := &http.Client{Timeout: 15 * time.Second}
 	for _, repo := range d.Repos {
 		url := fmt.Sprintf("%s/%s/%s/%s/%s", strings.TrimRight(repo, "/"), groupPath, artifact, version, name)
-		resp, err := client.Get(url)
+		resp, err := httpGetWithRetry(client, url, 3)
 		if err != nil {
 			continue
 		}
-		if resp.StatusCode != http.StatusOK {
-			resp.Body.Close()
+		if resp == nil {
 			continue
 		}
 		os.MkdirAll(filepath.Dir(modPath), 0755)
